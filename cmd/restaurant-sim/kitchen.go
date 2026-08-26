@@ -96,6 +96,11 @@ func (k *kitchen) HandleEvent(ctx context.Context, event eventEnvelope) {
 	}
 }
 
+// Конвейер запускается на собственном контексте, а не на контексте запроса:
+// платформа не должна ждать, пока кухня доготовит заказ, а обрыв соединения
+// не должен обрывать готовку.
+//
+//nolint:contextcheck // жизненный цикл конвейера намеренно длиннее запроса
 func (k *kitchen) handleOrderCreated(ctx context.Context, event eventEnvelope, log *slog.Logger) {
 	var payload orderCreatedPayload
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {

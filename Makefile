@@ -160,9 +160,12 @@ $(PLANTUML_JAR):
 		https://github.com/plantuml/plantuml/releases/download/v$(PLANTUML_VERSION)/plantuml-$(PLANTUML_VERSION).jar
 
 ## diagrams: отрендерить docs/diagrams/*.puml в SVG
+# -Playout=smetana включает встроенный в PlantUML движок раскладки, поэтому
+# внешний graphviz (dot) не нужен — диаграммы собираются и в CI, и на пустой
+# машине без дополнительных пакетов.
 .PHONY: diagrams
 diagrams: $(PLANTUML_JAR)
-	java -jar $(PLANTUML_JAR) -tsvg -nometadata docs/diagrams/*.puml
+	java -jar $(PLANTUML_JAR) -tsvg -nometadata -Playout=smetana docs/diagrams/*.puml
 	@echo "готово: $$(ls docs/diagrams/*.svg | wc -l) SVG"
 
 # ---------------------------------------------------------------------------

@@ -27,9 +27,11 @@ func toAPIRestaurant(r domain.Restaurant) gen.Restaurant {
 }
 
 func toAPIRestaurantPage(page app.RestaurantPage) gen.RestaurantPage {
+	// Индексный обход вместо range по значению: доменные сущности крупные,
+	// и копировать каждую ради маппинга незачем.
 	items := make([]gen.Restaurant, 0, len(page.Items))
-	for _, r := range page.Items {
-		items = append(items, toAPIRestaurant(r))
+	for i := range page.Items {
+		items = append(items, toAPIRestaurant(page.Items[i]))
 	}
 
 	result := gen.RestaurantPage{Items: items}
@@ -118,8 +120,8 @@ func toAPIOrder(order domain.Order) gen.Order {
 
 func toAPIOrders(orders []domain.Order) []gen.Order {
 	result := make([]gen.Order, 0, len(orders))
-	for _, order := range orders {
-		result = append(result, toAPIOrder(order))
+	for i := range orders {
+		result = append(result, toAPIOrder(orders[i]))
 	}
 	return result
 }

@@ -38,7 +38,7 @@ func (h *PartnerHandler) SyncMenu(
 	}
 
 	result, err := h.partners.SyncMenu(ctx, restaurant.ID,
-		toDomainSyncProducts(gen.MenuSyncRequest(*request.Body)))
+		toDomainSyncProducts(*request.Body))
 	if err != nil {
 		return nil, err
 	}

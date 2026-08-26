@@ -1,0 +1,137 @@
+@startuml cjm_restaurant
+' CJM заведения: подключение, синхронизация меню, работа с очередью заказов
+' и аварийные режимы.
+'
+' Рендер: make diagrams
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam ParticipantPadding 15
+skinparam BoxPadding 12
+
+skinparam sequence {
+  ArrowColor #2F4F6F
+  LifeLineBorderColor #9AA9B8
+  LifeLineBackgroundColor #F2F5F8
+  ParticipantBorderColor #2F4F6F
+  ParticipantBackgroundColor #E8EEF4
+  ActorBorderColor #2F4F6F
+  ActorBackgroundColor #E8EEF4
+}
+
+title CJM заведения — от подключения до выдачи заказа
+
+actor "Оператор кухни" as Op
+participant "Сервис заведения\n(restaurant-sim)" as SIM
+participant "API\nАвито.Кухня" as API
+database "PostgreSQL" as DB
+participant "Outbox-воркер" as OB
+
+== Подключение (вне рантайма) ==
+
+note over Op, DB
+  Заведение заводится администратором площадки: в БД появляется строка
+  с provider_base_url и SHA-256 партнёрского токена. Сам токен передаётся
+  заведению один раз и в платформе не хранится (ADR-0004).
+end note
+
+== Старт сервиса заведения ==
+
+SIM -> API : GET /readyz
+API --> SIM : 503, пока идут миграции
+note right of SIM
+  Порядок старта контейнеров не гарантирует
+  готовность API — сим повторяет попытки,
+  а не падает.
+end note
+SIM -> API : GET /readyz
+API --> SIM : 200
+
+== Синхронизация меню ==
+
+SIM -> API : POST /api/v1/partner/menu/sync\nX-Partner-Token: ***
+activate API
+API -> DB : SHA-256(токен) → заведение
+API -> DB : BEGIN
+API -> DB : SELECT ... FOR UPDATE (блокировка заведения)
+API -> DB : UPDATE menus SET status='archived'\nWHERE status='published'
+API -> DB : INSERT menus (version = MAX+1, 'published')
+API -> DB : INSERT products (unnest, одним запросом)
+API -> DB : COMMIT
+API --> SIM : 200 { version: 2, items_synced: 7 }
+deactivate API
+
+note over API, DB
+  Полная замена, а не патч: заведение — источник
+  правды по ассортименту. Старая версия
+  архивируется, поэтому исторические заказы
+  сохраняют свои цены и названия (ADR-0002).
+end note
+
+== Открытие кухни ==
+
+Op -> SIM : «открыть смену»
+SIM -> API : POST /api/v1/partner/kitchen-status { "status": "online" }
+API -> DB : UPDATE restaurants SET status='online'
+API --> SIM : 200 { "status": "online" }
+
+== Поступление заказа ==
+
+API -> DB : (клиент оформил заказ)\nINSERT outbox_events
+OB -> DB : SELECT ... WHERE sent_at IS NULL\nFOR UPDATE SKIP LOCKED + аренда
+DB --> OB : событие order_created
+OB -> SIM : POST /kitchen/events\nX-Event-ID: 42
+activate SIM
+SIM -> SIM : проверка X-Event-ID по кэшу дедупликации
+SIM --> OB : 204 No Content
+deactivate SIM
+OB -> DB : UPDATE outbox_events SET sent_at = NOW()
+
+note right of OB
+  Доставка at-least-once: событие может прийти
+  повторно, поэтому заведение обязано его
+  распознать по X-Event-ID (ADR-0003).
+end note
+
+== Конвейер приготовления ==
+
+SIM -> API : POST /partner/orders/{n}/status { ACCEPTED }
+API -> DB : UPDATE orders SET status, version=version+1\nWHERE id=? AND version=?
+API --> SIM : 200 заказ в статусе ACCEPTED
+
+SIM -> API : ... { COOKING }
+API --> SIM : 200
+
+SIM -> API : ... { READY }
+API --> SIM : 200
+
+Op -> SIM : выдаёт заказ курьеру
+SIM -> API : ... { DELIVERED }
+API --> SIM : 200
+
+== Гонка: пользователь отменил, кухня уже начала ==
+
+group Пользователь нажал «отменить» в ту же секунду
+  API -> DB : UPDATE ... WHERE version = 1 (отмена прошла)
+  SIM -> API : POST /partner/orders/{n}/status { ACCEPTED }
+  API --> SIM : 409 STATE_CONFLICT
+  SIM -> SIM : конвейер остановлен —\nштатный исход гонки, а не сбой
+end
+
+== Аварийный режим ==
+
+Op -> SIM : «стоп-лист» (SIM_REJECT_ALL=true)
+SIM -> API : POST /partner/orders/{n}/status { REJECTED }
+API -> DB : возврат остатков + отмена заказа
+API --> SIM : 200
+
+Op -> SIM : «закрыть кухню»
+SIM -> API : POST /partner/kitchen-status { "status": "closed" }
+API --> SIM : 200
+note right of API
+  Новые заказы теперь отклоняются с
+  422 RESTAURANT_UNAVAILABLE ещё до
+  списания остатков.
+end note
+
+@enduml

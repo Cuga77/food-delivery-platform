@@ -1,0 +1,143 @@
+@startuml cjm_user
+' CJM пользователя Авито.Кухня: от открытия каталога до отслеживания заказа.
+'
+' Диаграмма намеренно показывает не «счастливый путь», а места, где человек
+' спотыкается: товар кончился, сумма не дотянула до минимума, заказ уже нельзя
+' отменить. Именно эти развилки определяют, каким должен быть API.
+'
+' Рендер: make diagrams
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam sequenceMessageAlign direction
+skinparam ParticipantPadding 15
+skinparam BoxPadding 12
+
+skinparam sequence {
+  ArrowColor #2F4F6F
+  LifeLineBorderColor #9AA9B8
+  LifeLineBackgroundColor #F2F5F8
+  ParticipantBorderColor #2F4F6F
+  ParticipantBackgroundColor #E8EEF4
+  ActorBorderColor #2F4F6F
+  ActorBackgroundColor #E8EEF4
+}
+
+title CJM пользователя — путь до оформленного заказа
+
+actor "Пользователь" as U
+participant "Веб-клиент" as W
+participant "API\nАвито.Кухня" as API
+database "PostgreSQL" as DB
+participant "Заведение\n(restaurant-sim)" as R
+
+== Поиск заведения ==
+
+U -> W : открывает Авито.Кухня
+W -> API : GET /api/v1/restaurants?limit=20
+API -> DB : keyset-выборка по id
+DB --> API : страница заведений
+API --> W : 200 items[] + next_cursor
+W --> U : список заведений с признаком\nрежима работы и минимальной суммой
+
+note right of U
+  Первая развилка: закрытые заведения
+  видны, но помечены — иначе человек
+  соберёт корзину и упрётся в отказ.
+end note
+
+== Просмотр меню ==
+
+U -> W : выбирает «Пиццерия Авито»
+W -> API : GET /api/v1/restaurants/pizza-avito/menu
+API -> DB : опубликованная версия меню + позиции
+DB --> API : меню v2
+API --> W : 200 категории, цены, остатки
+W --> U : витрина; позиции без наличия\nпоказаны как недоступные
+
+== Попытка №1: товара не хватило ==
+
+U -> W : кладёт в корзину 12 × Маргарита
+W -> API : POST /api/v1/orders\nIdempotency-Key: <uuid-1>
+activate API
+API -> DB : BEGIN
+API -> DB : проверка режима заведения
+API -> DB : UPDATE products SET stock_qty = stock_qty - 12\nWHERE stock_qty >= 12
+DB --> API : 0 строк
+API -> DB : ROLLBACK
+API --> W : 409 OUT_OF_STOCK\n«осталось 10, а запрошено 12»
+deactivate API
+W --> U : «Осталось 10 порций» + кнопка\n«изменить количество»
+
+note right of API
+  Списание встроено в WHERE самого UPDATE:
+  между проверкой и списанием нет окна,
+  в которое влезет параллельный заказ.
+end note
+
+== Попытка №2: не набрана минимальная сумма ==
+
+U -> W : оставляет одну колу (120 ₽)
+W -> API : POST /api/v1/orders\nIdempotency-Key: <uuid-2>
+activate API
+API -> DB : BEGIN → списание → проверка минимума
+API -> DB : ROLLBACK (списание отменено)
+API --> W : 422 MIN_ORDER_NOT_MET\n«минимум 500 ₽, в корзине 120 ₽»
+deactivate API
+W --> U : «Добавьте ещё на 380 ₽»
+
+== Попытка №3: заказ оформлен ==
+
+U -> W : корзина на 1330 ₽
+W -> API : POST /api/v1/orders\nIdempotency-Key: <uuid-3>
+activate API
+API -> DB : BEGIN
+API -> DB : списание остатков
+API -> DB : INSERT orders + order_items (снапшот цен)
+API -> DB : INSERT order_status_events ('' → NEW)
+API -> DB : INSERT outbox_events (order_created)
+API -> DB : COMMIT
+API --> W : 201 public_number, status = NEW
+deactivate API
+W --> U : «Заказ оформлен» + номер
+
+note over API, DB
+  Заказ и событие для заведения фиксируются
+  одной транзакцией: события не может не быть
+  у существующего заказа, и наоборот.
+end note
+
+== Повтор запроса (обрыв связи у клиента) ==
+
+W -> API : POST /api/v1/orders\nтот же Idempotency-Key: <uuid-3>
+API -> DB : SELECT сохранённый ответ по ключу
+API --> W : 201 тот же public_number\nIdempotent-Replay: true
+W --> U : один заказ, а не два
+
+== Отслеживание статуса ==
+
+API -> R : POST /kitchen/events (order_created)
+R -> API : POST /partner/orders/{n}/status → ACCEPTED
+R -> API : ... → COOKING → READY
+
+loop пока заказ не доставлен
+  U -> W : обновляет страницу заказа
+  W -> API : GET /api/v1/orders/{public_number}
+  API --> W : 200 статус + таймлайн событий
+  W --> U : «Готовится» → «Готов»
+end
+
+== Поздняя отмена ==
+
+U -> W : «Отменить заказ» (заказ уже READY)
+W -> API : POST /api/v1/orders/{n}/cancel
+API --> W : 409 ORDER_CANNOT_BE_CANCELLED
+W --> U : «Заказ уже готов — свяжитесь\nс заведением»
+
+note right of U
+  Граница ответственности: до ACCEPTED заказ
+  отменяет пользователь, после — только
+  заведение. Продукты уже в работе.
+end note
+
+@enduml

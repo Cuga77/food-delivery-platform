@@ -59,19 +59,19 @@ func (c *platformClient) SyncMenu(ctx context.Context, products []menuProduct) (
 func (c *platformClient) SetOrderStatus(ctx context.Context, publicNumber, status, comment string) error {
 	return c.do(ctx, http.MethodPost,
 		"/api/v1/partner/orders/"+publicNumber+"/status",
-		map[string]any{"status": status, "comment": comment}, nil)
+		map[string]any{statusField: status, "comment": comment}, nil)
 }
 
 // SetKitchenStatus переключает режим работы кухни.
 func (c *platformClient) SetKitchenStatus(ctx context.Context, status string) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/partner/kitchen-status",
-		map[string]any{"status": status}, nil)
+		map[string]any{statusField: status}, nil)
 }
 
 // Health проверяет, что платформа поднялась. Используется при старте, пока
 // контейнер api ещё инициализируется.
 func (c *platformClient) Health(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/readyz", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/readyz", http.NoBody)
 	if err != nil {
 		return err
 	}

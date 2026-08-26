@@ -52,9 +52,3 @@ func wrapDBError(err error, operation string) error {
 
 	return domain.WrapErrorf(err, domain.CodeInternalError, "ошибка БД при выполнении операции «%s»", operation)
 }
-
-// isPgCode сообщает, что ошибка драйвера несёт указанный SQLSTATE.
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
-}

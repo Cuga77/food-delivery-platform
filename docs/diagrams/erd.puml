@@ -1,0 +1,166 @@
+@startuml erd
+' ER-диаграмма схемы БД. Соответствует migrations/000001_init_schema.up.sql.
+'
+' Рендер: make diagrams
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam linetype ortho
+skinparam wrapWidth 260
+
+skinparam class {
+  BackgroundColor #F7F9FB
+  BorderColor #2F4F6F
+  HeaderBackgroundColor #4A6785
+  FontColor #1B2A38
+  ArrowColor #4A6785
+}
+
+hide circle
+hide methods
+
+title Схема БД Авито.Кухня — сущности, ключи и ограничения
+
+entity "**restaurants**" as restaurants {
+  **id** : BIGINT <<PK, identity>>
+  --
+  slug : VARCHAR(64) <<UQ>>
+  name : VARCHAR(255)
+  status : VARCHAR(32) <<CHECK: online|paused|closed>>
+  provider_base_url : VARCHAR(512)
+  api_key_hash : CHAR(64) <<UQ>>
+  min_order_kopecks : BIGINT <<CHECK ≥ 0>>
+  delivery_fee_kopecks : BIGINT <<CHECK ≥ 0>>
+  created_at / updated_at : TIMESTAMPTZ
+}
+
+entity "**menus**" as menus {
+  **id** : BIGINT <<PK, identity>>
+  --
+  restaurant_id : BIGINT <<FK → restaurants, CASCADE>>
+  version : INT <<CHECK > 0>>
+  status : VARCHAR(32) <<CHECK: draft|published|archived>>
+  created_at : TIMESTAMPTZ
+  --
+  <<UQ (restaurant_id, version)>>
+  <<UQ partial (restaurant_id) WHERE status='published'>>
+}
+
+entity "**products**" as products {
+  **id** : BIGINT <<PK, identity>>
+  --
+  menu_id : BIGINT <<FK → menus, CASCADE>>
+  product_key : VARCHAR(64)
+  category : VARCHAR(128)
+  name : VARCHAR(255)
+  description : TEXT
+  price_kopecks : BIGINT <<CHECK ≥ 0>>
+  available : BOOLEAN
+  stock_qty : INT NULL <<NULL = без ограничения>>
+  --
+  <<UQ (menu_id, product_key)>>
+  <<IDX (menu_id)>>
+}
+
+entity "**orders**" as orders {
+  **id** : BIGINT <<PK, identity>>
+  --
+  public_number : UUID <<UQ, UUIDv7>>
+  user_external_id : VARCHAR(128)
+  restaurant_id : BIGINT <<FK → restaurants, RESTRICT>>
+  status : VARCHAR(32) <<CHECK: NEW..CANCELLED>>
+  delivery_address : TEXT
+  subtotal_kopecks : BIGINT <<CHECK ≥ 0>>
+  delivery_fee_kopecks : BIGINT <<CHECK ≥ 0>>
+  total_kopecks : BIGINT <<CHECK = subtotal + fee>>
+  cancel_reason : TEXT NULL
+  version : INT <<оптимистичная блокировка>>
+  created_at / updated_at : TIMESTAMPTZ
+  --
+  <<IDX (user_external_id, created_at DESC)>>
+  <<IDX (restaurant_id, status)>>
+  <<IDX partial (created_at) WHERE status='NEW'>>
+}
+
+entity "**order_items**" as order_items {
+  **id** : BIGINT <<PK, identity>>
+  --
+  order_id : BIGINT <<FK → orders, CASCADE>>
+  product_id : BIGINT NULL <<FK → products, SET NULL>>
+  product_key : VARCHAR(64)
+  product_name_snapshot : VARCHAR(255)
+  unit_price_kopecks : BIGINT <<CHECK ≥ 0>>
+  qty : INT <<CHECK > 0>>
+  line_total_kopecks : BIGINT <<CHECK = unit_price × qty>>
+}
+
+entity "**order_status_events**" as events {
+  **id** : BIGINT <<PK, identity>>
+  --
+  order_id : BIGINT <<FK → orders, CASCADE>>
+  from_status : VARCHAR(32) <<'' для создания>>
+  to_status : VARCHAR(32)
+  actor : VARCHAR(32) <<CHECK: user|restaurant|system>>
+  comment : TEXT
+  created_at : TIMESTAMPTZ
+  --
+  <<IDX (order_id, id)>>
+}
+
+entity "**idempotency_keys**" as idem {
+  **key** : VARCHAR(128) <<PK>>
+  --
+  request_hash : CHAR(64) <<SHA-256 тела>>
+  response_status : INT <<0 = выполняется>>
+  response_body : JSONB
+  created_at : TIMESTAMPTZ
+  expires_at : TIMESTAMPTZ
+  --
+  <<IDX (expires_at)>>
+}
+
+entity "**outbox_events**" as outbox {
+  **id** : BIGINT <<PK, identity>>
+  --
+  aggregate_type : VARCHAR(64)
+  aggregate_id : VARCHAR(64) <<public_number заказа>>
+  event_type : VARCHAR(64)
+  payload : JSONB
+  attempts : INT
+  next_retry_at : TIMESTAMPTZ <<аренда воркера>>
+  sent_at : TIMESTAMPTZ NULL
+  dead_at : TIMESTAMPTZ NULL
+  last_error : TEXT NULL
+  created_at : TIMESTAMPTZ
+  --
+  <<IDX partial (next_retry_at)\nWHERE sent_at IS NULL AND dead_at IS NULL>>
+}
+
+restaurants ||--o{ menus : "версии меню"
+menus ||--o{ products : "позиции версии"
+restaurants ||--o{ orders : "заказы заведения"
+orders ||--|{ order_items : "снапшот позиций"
+orders ||--|{ events : "история статусов"
+products |o..o{ order_items : "мягкая ссылка\n(ON DELETE SET NULL)"
+
+note bottom of order_items
+  <b>Почему снапшот, а не только FK</b>
+  product_id может обнулиться, а позиция —
+  уехать в архивную версию меню. Название и
+  цена скопированы в заказ, поэтому чек
+  остаётся читаемым и корректным навсегда.
+end note
+
+note bottom of outbox
+  Внешнего ключа на orders нет намеренно:
+  очередь событий переживает удаление
+  агрегата и не мешает его удалить.
+end note
+
+note bottom of restaurants
+  Хранится только SHA-256 партнёрского токена.
+  Уникальный индекс по хэшу даёт аутентификацию
+  одним поиском по индексу.
+end note
+
+@enduml

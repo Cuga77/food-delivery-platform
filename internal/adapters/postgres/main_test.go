@@ -12,6 +12,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -79,7 +80,7 @@ func migrateUp() error {
 	}
 	defer m.Close()
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return err
 	}
 	return nil
@@ -127,7 +128,11 @@ func newTestEnv(t testing.TB) *testEnv {
 }
 
 // seedRestaurant создаёт заведение со случайным slug и токеном.
-func (e *testEnv) seedRestaurant(t testing.TB, status domain.RestaurantStatus, minOrder, deliveryFee int64) (domain.Restaurant, string) {
+func (e *testEnv) seedRestaurant(
+	t testing.TB,
+	status domain.RestaurantStatus,
+	minOrder, deliveryFee int64,
+) (restaurant domain.Restaurant, partnerToken string) {
 	t.Helper()
 
 	slug := unique("test-rest")
@@ -145,7 +150,7 @@ func (e *testEnv) seedRestaurant(t testing.TB, status domain.RestaurantStatus, m
 		minOrder, deliveryFee).Scan(&id)
 	require.NoError(t, err)
 
-	restaurant, err := e.restaurants.GetByID(context.Background(), id)
+	restaurant, err = e.restaurants.GetByID(context.Background(), id)
 	require.NoError(t, err)
 
 	return restaurant, token

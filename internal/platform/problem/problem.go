@@ -85,12 +85,10 @@ func FromError(ctx context.Context, err error, instance string) Problem {
 	code := domain.CodeOf(err)
 	status := StatusFor(code)
 
-	detail := ""
+	detail := "внутренняя ошибка сервиса"
 	var domainErr *domain.Error
 	if errors.As(err, &domainErr) {
 		detail = domainErr.Detail
-	} else {
-		detail = "внутренняя ошибка сервиса"
 	}
 
 	return Problem{

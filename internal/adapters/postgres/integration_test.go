@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -51,7 +52,8 @@ func TestMigrations_AreReversible(t *testing.T) {
 	require.NoError(t, m.Down(), "откат всех миграций")
 
 	err = m.Up()
-	require.True(t, err == nil || err == migrate.ErrNoChange, "повторное применение миграций: %v", err)
+	require.True(t, err == nil || errors.Is(err, migrate.ErrNoChange),
+		"повторное применение миграций: %v", err)
 
 	// После восстановления схемы демо-данные снова на месте.
 	var count int
