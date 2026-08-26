@@ -159,15 +159,20 @@ CREATE TABLE outbox_events (
     attempts       INT         NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_retry_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at        TIMESTAMPTZ NULL,
+    dead_at        TIMESTAMPTZ NULL,
     last_error     TEXT        NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE outbox_events IS
     'Событие пишется в одной транзакции с изменением агрегата; воркер доставляет его заведению';
+COMMENT ON COLUMN outbox_events.sent_at IS 'Заполняется после успешной доставки';
+COMMENT ON COLUMN outbox_events.dead_at IS
+    'Событие снято с доставки после исчерпания попыток; строка остаётся для разбора инцидента';
 
--- Частичный индекс: воркер сканирует только неотправленные события.
-CREATE INDEX idx_outbox_pending ON outbox_events (next_retry_at) WHERE sent_at IS NULL;
+-- Частичный индекс: воркер сканирует только события, ожидающие доставки.
+CREATE INDEX idx_outbox_pending ON outbox_events (next_retry_at)
+    WHERE sent_at IS NULL AND dead_at IS NULL;
 CREATE INDEX idx_outbox_aggregate ON outbox_events (aggregate_type, aggregate_id);
 
 COMMIT;

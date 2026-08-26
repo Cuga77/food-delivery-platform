@@ -1,0 +1,18 @@
+# В образ попадают только исходники и go.mod/go.sum — всё остальное лишь
+# раздувает контекст сборки и ломает кэш слоёв.
+.git
+.github
+.idea
+.vscode
+
+bin/
+build/plantuml.jar
+docs/
+scripts/
+migrations/
+
+*.md
+!go.mod
+.env
+coverage.txt
+*.test
