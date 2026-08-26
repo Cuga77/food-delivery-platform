@@ -1,0 +1,17 @@
+# Конфигурация oapi-codegen. Единственный источник правды — api/openapi.yaml;
+# файлы в internal/gen редактировать руками нельзя, они перегенерируются
+# командой `make gen` и проверяются в CI через `make gen-check`.
+package: gen
+output: internal/gen/api.gen.go
+
+output-options:
+  skip-prune: true
+  # Тело запроса валидируется вручную в доменном слое, но базовые проверки
+  # (обязательные поля, типы) выполняет сгенерированный код.
+  nullable-type: false
+
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: true

@@ -1,0 +1,95 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  default: standard
+  enable:
+    - bodyclose        # незакрытые response.Body
+    - containedctx     # context.Context внутри структуры
+    - contextcheck     # потерянный контекст
+    - dupl             # копипаста
+    - durationcheck    # умножение двух Duration
+    - errorlint        # %w и errors.As/Is
+    - exhaustive       # неполные switch по типизированным константам (статусы заказа)
+    - gochecknoinits   # неявная инициализация
+    - gocritic
+    - goconst
+    - gosec
+    - misspell
+    - nakedret
+    - nilerr           # return nil при ненулевой ошибке
+    - noctx            # HTTP-запрос без контекста
+    - predeclared
+    - revive
+    - rowserrcheck     # незакрытый rows.Err()
+    - sqlclosecheck    # незакрытые rows/stmt
+    - unconvert
+    - unparam
+    - wastedassign
+    - whitespace
+
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        - G404  # math/rand допустим для джиттера backoff
+    goconst:
+      min-len: 3
+      min-occurrences: 4
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - whyNoLint
+        - hugeParam
+
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - internal/gen
+    rules:
+      # В тестах допустимы длинные таблицы, слабый рандом и дубли.
+      - path: _test\.go
+        linters:
+          - dupl
+          - gosec
+          - goconst
+          - unparam
+      # SQL-константы репозиториев неизбежно похожи друг на друга.
+      - path: internal/adapters/postgres/
+        linters:
+          - dupl
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - avito-kitchen
+  exclusions:
+    generated: strict
+    paths:
+      - internal/gen

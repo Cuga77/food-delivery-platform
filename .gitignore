@@ -1,0 +1,19 @@
+# Binaries
+/bin/
+/build/*.jar
+
+# Rendered diagrams are committed; nothing else from docs is generated
+docs/diagrams/*.png
+
+# Local environment
+.env
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# Editors
+.idea/
+.vscode/
+*.swp
