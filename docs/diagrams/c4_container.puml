@@ -1,0 +1,90 @@
+@startuml c4_container
+' C4 Level 2 — контейнеры системы Авито.Кухня.
+'
+' Стили C4 заданы прямо здесь, без !include с внешних адресов: диаграмма
+' должна рендериться в офлайне и в CI, где выхода в интернет может не быть.
+'
+' Рендер: make diagrams
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName "Helvetica"
+skinparam wrapWidth 220
+skinparam ArrowColor #4A6785
+skinparam ArrowFontColor #33475B
+skinparam ArrowFontSize 11
+
+skinparam rectangle {
+  BorderColor #2F4F6F
+  FontColor #FFFFFF
+  BackgroundColor #4A6785
+  RoundCorner 8
+}
+
+skinparam database {
+  BorderColor #2F4F6F
+  FontColor #FFFFFF
+  BackgroundColor #3C6E71
+}
+
+skinparam actor {
+  BorderColor #6B7A8C
+  BackgroundColor #E8EEF4
+  FontColor #1B2A38
+}
+
+title Авито.Кухня — C4 Level 2: контейнеры
+
+actor "Пользователь" as user
+actor "Оператор\nзаведения" as operator
+
+rectangle "Веб-клиент\n<size:10>[SPA, вне scope MVP]</size>\n\nВитрина заведений, корзина,\nотслеживание заказа" as web #6B7A8C
+
+package "Авито.Кухня" {
+
+  rectangle "**api**\n<size:10>[Go 1.25, chi, oapi-codegen]</size>\n\nB2C и B2B HTTP API.\nВся бизнес-логика и границы\nтранзакций живут здесь." as api
+
+  rectangle "**outbox-воркер**\n<size:10>[Go, горутина внутри api]</size>\n\nЗабирает события под\nSKIP LOCKED и доставляет их\nзаведениям с backoff" as outbox
+
+  rectangle "**reaper-воркер**\n<size:10>[Go, горутина внутри api]</size>\n\nОтменяет заказы, не принятые\nза ORDER_ACCEPT_TIMEOUT,\nчистит ключи идемпотентности" as reaper
+
+  database "**PostgreSQL 17**\n<size:10>[postgres:17-alpine]</size>\n\nЗаведения, версии меню,\nзаказы, история статусов,\nidempotency_keys, outbox_events" as db
+
+  rectangle "**migrate**\n<size:10>[migrate/migrate, разовый запуск]</size>\n\nПрименяет миграции до старта api" as migrate #6B7A8C
+}
+
+rectangle "**restaurant-sim**\n<size:10>[Go 1.25, chi]</size>\n\nСервис заведения: эталонное меню,\nприём вебхуков, управление\nстатусами заказов" as sim #3C6E71
+
+user --> web : оформляет заказ\n<size:10>[HTTPS]</size>
+web --> api : REST, JSON\n<size:10>[HTTP/1.1, :8080]</size>
+
+operator --> sim : открывает/закрывает кухню
+sim --> api : B2B API: menu/sync,\nstatus, kitchen-status\n<size:10>[HTTP, X-Partner-Token]</size>
+outbox --> sim : POST /kitchen/events\n<size:10>[HTTP, X-Event-ID]</size>
+
+api --> db : SQL, транзакции\n<size:10>[pgx/v5, пул соединений]</size>
+outbox --> db : SELECT ... FOR UPDATE\nSKIP LOCKED
+reaper --> db : выборка зависших заказов,\nудаление протухших ключей
+migrate --> db : DDL\n<size:10>[golang-migrate]</size>
+
+note bottom of api
+  <b>Почему монолит, а не набор сервисов</b>
+  Ключевой инвариант MVP — атомарность
+  «списать остаток + создать заказ + записать
+  событие». В одном процессе с одной БД это
+  одна транзакция; разнесённое по сервисам,
+  это распределённая сага, которой на объёмах
+  MVP нечего оптимизировать.
+end note
+
+note right of outbox
+  <b>Почему воркеры внутри api</b>
+  Общий код, общий пул соединений, одна
+  единица деплоя. Аренда событий и
+  SKIP LOCKED уже позволяют запускать
+  несколько экземпляров api параллельно —
+  вынести воркеры в отдельный бинарник
+  можно без изменения схемы БД.
+end note
+
+@enduml

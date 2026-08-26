@@ -76,6 +76,8 @@ linters:
           - gosec
           - goconst
           - unparam
+          # В фикстурах читаемый range по значению важнее экономии на копировании.
+          - gocritic
       # SQL-константы репозиториев неизбежно похожи друг на друга.
       - path: internal/adapters/postgres/
         linters:

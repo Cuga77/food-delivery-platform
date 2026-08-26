@@ -113,11 +113,11 @@ func (w *OutboxWorker) processBatch(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	for _, event := range events {
+	for i := range events {
 		if ctx.Err() != nil {
 			return len(events), ctx.Err()
 		}
-		w.deliver(ctx, event)
+		w.deliver(ctx, events[i])
 	}
 
 	return len(events), nil

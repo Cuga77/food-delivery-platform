@@ -181,7 +181,7 @@ func (m *fakeMenuRepo) PublishVersion(_ context.Context, restaurantID int64, pro
 	version := prev.Menu.Version + 1
 
 	stored := make([]domain.Product, len(products))
-	nextID := int64(1000*restaurantID) + int64(version)*100
+	nextID := 1000*restaurantID + int64(version)*100
 	for i, p := range products {
 		p.ID = nextID + int64(i)
 		p.MenuID = int64(version)

@@ -65,7 +65,7 @@ func (s *CatalogService) ListRestaurants(ctx context.Context, q ListRestaurantsQ
 	}
 
 	page := RestaurantPage{Items: items}
-	if int32(len(items)) > limit {
+	if len(items) > int(limit) {
 		page.Items = items[:limit]
 		page.NextCursor = EncodeCursor(page.Items[len(page.Items)-1].ID)
 	}

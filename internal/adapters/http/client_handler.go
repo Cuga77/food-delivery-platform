@@ -74,7 +74,7 @@ func (h *ClientHandler) CreateOrder(
 		return nil, domain.Errorf(domain.CodeBadRequest, "пустое тело запроса")
 	}
 
-	order, err := h.orders.Create(ctx, toDomainDraft(gen.CreateOrderRequest(*request.Body)))
+	order, err := h.orders.Create(ctx, toDomainDraft(*request.Body))
 	if err != nil {
 		return nil, err
 	}

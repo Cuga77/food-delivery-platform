@@ -1,0 +1,82 @@
+@startuml order_state_machine
+' Жизненный цикл заказа. Граф соответствует таблице transitionsFrom в
+' internal/domain/state_machine.go — эта диаграмма и код обязаны совпадать,
+' а полнота графа зафиксирована тестом на матрицу 7×7×3.
+'
+' Рендер: make diagrams
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+
+skinparam state {
+  BackgroundColor #E8EEF4
+  BorderColor #2F4F6F
+  FontColor #1B2A38
+  ArrowColor #2F4F6F
+  StartColor #2F4F6F
+  EndColor #2F4F6F
+}
+
+title Жизненный цикл заказа — переходы и их инициаторы
+
+legend top right
+  |= Инициатор |= Кто это |
+  | <b>user</b> | пользователь из веб-клиента |
+  | <b>restaurant</b> | заведение через B2B API |
+  | <b>system</b> | платформа (reaper по таймауту) |
+  ----
+  <b>+ остатки</b> — переход возвращает списанные остатки в каталог
+endlegend
+
+[*] --> NEW : <b>user</b>\nPOST /api/v1/orders\nостатки списаны
+
+state NEW #FFF4E0 : Заказ создан, остатки зарезервированы.\nЗаведение ещё не ответило.
+state ACCEPTED : Заведение приняло заказ в работу.
+state COOKING : Заказ готовится.
+state READY : Заказ готов и передан курьеру.
+state REJECTED #FDECEC : Заведение отказалось.
+state CANCELLED #FDECEC : Заказ отменён.
+state DELIVERED #E8F5E9 : Заказ доставлен.
+
+NEW --> ACCEPTED : <b>restaurant</b>
+NEW --> REJECTED : <b>restaurant</b>\n<b>+ остатки</b>
+NEW --> CANCELLED : <b>user</b> — передумал\n<b>system</b> — истёк\nORDER_ACCEPT_TIMEOUT\n<b>+ остатки</b>
+
+ACCEPTED --> COOKING : <b>restaurant</b>
+ACCEPTED --> CANCELLED : <b>restaurant</b>\n<b>+ остатки</b>
+
+COOKING --> READY : <b>restaurant</b>
+COOKING --> CANCELLED : <b>restaurant</b>\n<b>+ остатки</b>
+
+READY --> DELIVERED : <b>restaurant</b>
+
+REJECTED --> [*]
+CANCELLED --> [*]
+DELIVERED --> [*]
+
+note as N1
+  <b>Почему после ACCEPTED пользователь не отменяет сам</b>
+  Заведение уже пустило продукты в работу. Попытка
+  вернёт 409 ORDER_CANNOT_BE_CANCELLED — отдельный
+  код, а не общий STATE_CONFLICT, чтобы клиент мог
+  показать человеку понятный текст.
+end note
+
+note as N2
+  <b>Как исключены гонки</b>
+  Каждый переход выполняется как
+  UPDATE ... WHERE id = ? AND version = ?
+  с инкрементом version. Если заказ изменили
+  параллельно, строк не затронуто и возвращается
+  409 STATE_CONFLICT — чужое изменение не затирается.
+end note
+
+note as N3
+  <b>Возврат остатков</b>
+  Определяется целевым статусом, а не путём: любой
+  переход в REJECTED или CANCELLED возвращает
+  остатки в той же транзакции, что и смена статуса.
+  Позиции архивных версий меню пропускаются (ADR-0002).
+end note
+
+@enduml

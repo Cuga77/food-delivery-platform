@@ -54,7 +54,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
-	r.Use(chimw.RealIP)
+	// chimw.RealIP намеренно не используется: он доверяет заголовкам
+	// X-Forwarded-For / X-Real-IP, которые клиент может подделать, если перед
+	// сервисом нет доверенного прокси. В MVP такого прокси нет, поэтому
+	// remote_addr в логах остаётся адресом реального соединения.
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer(cfg.Logger))
 	r.Use(middleware.Logger(cfg.Logger))

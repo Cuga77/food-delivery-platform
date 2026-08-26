@@ -3,6 +3,7 @@
 package middleware
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -63,14 +64,16 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 func Recoverer(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			defer func() {
+			// Контекст запроса здесь используется только для логирования: сама
+			// обработка паники ничего не отменяет и не запускает.
+			defer func() { //nolint:contextcheck // логируем в контексте запроса, новых вызовов не делаем
 				rec := recover()
 				if rec == nil {
 					return
 				}
 				// http.ErrAbortHandler — штатный способ прервать обработку,
 				// его перехватывать не нужно.
-				if err, ok := rec.(error); ok && err == http.ErrAbortHandler {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
 

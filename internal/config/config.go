@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -87,14 +88,14 @@ func Load() (Config, error) {
 		},
 		DB: DBConfig{
 			DSN:            getString("DATABASE_URL", ""),
-			MaxConns:       int32(getInt("DB_MAX_CONNS", 10, &errs)),
-			MinConns:       int32(getInt("DB_MIN_CONNS", 2, &errs)),
+			MaxConns:       getInt32("DB_MAX_CONNS", 10, &errs),
+			MinConns:       getInt32("DB_MIN_CONNS", 2, &errs),
 			ConnectTimeout: getDuration("DB_CONNECT_TIMEOUT", 10*time.Second, &errs),
 		},
 		Outbox: OutboxConfig{
 			PollInterval: getDuration("OUTBOX_POLL_INTERVAL", 500*time.Millisecond, &errs),
-			BatchSize:    int32(getInt("OUTBOX_BATCH_SIZE", 50, &errs)),
-			MaxAttempts:  int32(getInt("OUTBOX_MAX_ATTEMPTS", 10, &errs)),
+			BatchSize:    getInt32("OUTBOX_BATCH_SIZE", 50, &errs),
+			MaxAttempts:  getInt32("OUTBOX_MAX_ATTEMPTS", 10, &errs),
 			BaseBackoff:  getDuration("OUTBOX_BASE_BACKOFF", time.Second, &errs),
 			MaxBackoff:   getDuration("OUTBOX_MAX_BACKOFF", 5*time.Minute, &errs),
 			Lease:        getDuration("OUTBOX_LEASE", 30*time.Second, &errs),
@@ -103,7 +104,7 @@ func Load() (Config, error) {
 		Reaper: ReaperConfig{
 			Interval:           getDuration("REAPER_INTERVAL", 30*time.Second, &errs),
 			OrderAcceptTimeout: getDuration("ORDER_ACCEPT_TIMEOUT", 5*time.Minute, &errs),
-			BatchSize:          int32(getInt("REAPER_BATCH_SIZE", 100, &errs)),
+			BatchSize:          getInt32("REAPER_BATCH_SIZE", 100, &errs),
 		},
 		Idempot: IdempotencyConfig{
 			TTL: getDuration("IDEMPOTENCY_TTL", 24*time.Hour, &errs),
@@ -177,6 +178,18 @@ func getInt(key string, fallback int, errs *[]error) int {
 		return fallback
 	}
 	return value
+}
+
+// getInt32 читает значение и проверяет, что оно помещается в int32.
+// Без проверки конфигурация вроде DB_MAX_CONNS=5000000000 молча превратилась
+// бы в отрицательное число.
+func getInt32(key string, fallback int32, errs *[]error) int32 {
+	value := getInt(key, int(fallback), errs)
+	if value < math.MinInt32 || value > math.MaxInt32 {
+		*errs = append(*errs, fmt.Errorf("%s: значение %d не помещается в int32", key, value))
+		return fallback
+	}
+	return int32(value)
 }
 
 func getDuration(key string, fallback time.Duration, errs *[]error) time.Duration {

@@ -84,16 +84,18 @@ func run() error {
 // newRouter собирает HTTP-API заведения.
 func newRouter(kitchen *kitchen, log *slog.Logger) http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
+	// RealIP не подключаем: он доверяет заголовкам, которые клиент может
+	// подделать, а доверенного прокси перед сервисом нет.
+	r.Use(chimw.RequestID, chimw.Recoverer)
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{statusField: "ok"})
 	})
 
 	// Готовность заведения не зависит от платформы: сим обязан принимать
 	// вебхуки, даже если сам сейчас не может достучаться до API.
 	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(w, http.StatusOK, map[string]string{statusField: "ready"})
 	})
 
 	// Эталонное меню заведения: то, что оно синхронизирует в платформу.
@@ -167,6 +169,9 @@ func syncMenuWhenReady(ctx context.Context, cfg simConfig, client *platformClien
 		}
 	}
 }
+
+// statusField — имя поля со статусом в JSON-ответах и запросах.
+const statusField = "status"
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")

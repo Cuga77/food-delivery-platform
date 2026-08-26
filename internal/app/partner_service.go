@@ -11,6 +11,10 @@ import (
 const (
 	defaultPartnerOrdersLimit = 50
 	maxPartnerOrdersLimit     = 200
+
+	// maxSyncMenuItems — верхняя граница размера меню; совпадает с maxItems
+	// в схеме MenuSyncRequest контракта.
+	maxSyncMenuItems = 1000
 )
 
 // PartnerService — сценарии B2B-контура: аутентификация заведения,
@@ -81,6 +85,10 @@ func (s *PartnerService) SyncMenu(
 		return SyncMenuResult{}, domain.Errorf(domain.CodeValidationError,
 			"меню не может быть пустым")
 	}
+	if len(products) > maxSyncMenuItems {
+		return SyncMenuResult{}, domain.Errorf(domain.CodeValidationError,
+			"в меню не может быть больше %d позиций, прислано %d", maxSyncMenuItems, len(products))
+	}
 	if err := validateSyncProducts(products); err != nil {
 		return SyncMenuResult{}, err
 	}
@@ -95,6 +103,7 @@ func (s *PartnerService) SyncMenu(
 		return SyncMenuResult{}, err
 	}
 
+	//nolint:gosec // длина проверена выше и не превышает maxSyncMenuItems
 	return SyncMenuResult{Version: menu.Version, ItemsSynced: int32(len(products))}, nil
 }
 

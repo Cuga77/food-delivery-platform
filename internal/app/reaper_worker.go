@@ -95,10 +95,11 @@ func (w *ReaperWorker) cancelStaleOrders(ctx context.Context) {
 		return
 	}
 
-	for _, order := range stale {
+	for i := range stale {
 		if ctx.Err() != nil {
 			return
 		}
+		order := stale[i]
 
 		_, err := w.orderService.ChangeStatus(ctx, StatusChange{
 			PublicNumber: order.PublicNumber,
