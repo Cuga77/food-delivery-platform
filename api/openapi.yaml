@@ -1,0 +1,860 @@
+openapi: 3.0.3
+
+info:
+  title: Авито.Кухня API
+  version: 1.0.0
+  description: |
+    MVP-платформа доставки еды: витрина заведений для клиента (B2C) и
+    интеграционный контур для заведений (B2B).
+
+    ## Деньги
+    Все денежные величины передаются целым числом копеек (`int64`). Дробных
+    типов в контракте нет — это исключает ошибки округления.
+
+    ## Ошибки
+    Все ошибочные ответы отдаются в формате RFC 7807 с `Content-Type:
+    application/problem+json`. Машиночитаемый разбор — по полю `code`.
+
+    ## Идемпотентность
+    `POST /api/v1/orders` требует заголовок `Idempotency-Key`. Повтор запроса с
+    тем же ключом и тем же телом вернёт исходный ответ; тот же ключ с другим
+    телом — ошибку `IDEMPOTENCY_PAYLOAD_MISMATCH`.
+  contact:
+    name: Авито.Кухня
+    url: https://avito.ru/kitchen
+
+servers:
+  - url: http://localhost:8080
+    description: Локальное окружение (docker compose)
+
+tags:
+  - name: system
+    description: Проверки живости и готовности
+  - name: client
+    description: B2C API для веб-клиента
+  - name: partner
+    description: B2B API для заведений
+
+paths:
+  # ---------------------------------------------------------------------------
+  # System
+  # ---------------------------------------------------------------------------
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: Проверка живости процесса
+      security: []
+      responses:
+        "200":
+          description: Сервис жив
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /readyz:
+    get:
+      tags: [system]
+      operationId: getReadiness
+      summary: Проверка готовности (включая доступность БД)
+      security: []
+      responses:
+        "200":
+          description: Сервис готов принимать трафик
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: Зависимости недоступны
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  # ---------------------------------------------------------------------------
+  # Client (B2C)
+  # ---------------------------------------------------------------------------
+  /api/v1/restaurants:
+    get:
+      tags: [client]
+      operationId: listRestaurants
+      summary: Каталог заведений
+      description: |
+        Курсорная (keyset) пагинация. `next_cursor` из ответа передаётся в
+        следующий запрос; отсутствие поля означает конец выборки.
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Размер страницы
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Непрозрачный курсор из поля `next_cursor` предыдущего ответа
+          schema:
+            type: string
+            maxLength: 128
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по режиму работы заведения
+          schema:
+            $ref: "#/components/schemas/RestaurantStatus"
+      responses:
+        "200":
+          description: Страница каталога
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestaurantPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/restaurants/{slug}/menu:
+    get:
+      tags: [client]
+      operationId: getRestaurantMenu
+      summary: Витрина меню заведения
+      description: |
+        Возвращает актуальную опубликованную версию меню, сгруппированную по
+        категориям, вместе с признаками наличия и остатками.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          description: Человекочитаемый идентификатор заведения
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        "200":
+          description: Меню заведения
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestaurantMenu"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/orders:
+    post:
+      tags: [client]
+      operationId: createOrder
+      summary: Оформление заказа
+      description: |
+        Заказ создаётся атомарно: проверка режима работы заведения, валидация
+        позиций по опубликованному меню, списание остатков, расчёт суммы по
+        ценам из БД и фиксация снапшота позиций происходят в одной транзакции.
+
+        Цены из тела запроса не принимаются — итог всегда считается сервером.
+      security: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Уникальный ключ операции (UUID), живёт 24 часа
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: Заказ создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            Конфликт состояния каталога: `OUT_OF_STOCK`, `PRODUCT_UNAVAILABLE`,
+            `IDEMPOTENCY_IN_PROGRESS`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: |
+            Бизнес-правило не выполнено: `MIN_ORDER_NOT_MET`,
+            `RESTAURANT_UNAVAILABLE`, `IDEMPOTENCY_PAYLOAD_MISMATCH`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /api/v1/orders/{public_number}:
+    get:
+      tags: [client]
+      operationId: getOrder
+      summary: Карточка заказа с историей статусов
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PublicNumber"
+      responses:
+        "200":
+          description: Заказ найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/orders/{public_number}/cancel:
+    post:
+      tags: [client]
+      operationId: cancelOrder
+      summary: Отмена заказа пользователем
+      description: |
+        Пользователь может отменить заказ только пока заведение его не приняло
+        (статус `NEW`). После `ACCEPTED` отмена доступна только со стороны
+        заведения. Списанные остатки возвращаются в той же транзакции.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PublicNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelOrderRequest"
+      responses:
+        "200":
+          description: Заказ отменён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "`ORDER_CANNOT_BE_CANCELLED` — заказ уже принят заведением"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  # ---------------------------------------------------------------------------
+  # Partner (B2B)
+  # ---------------------------------------------------------------------------
+  /api/v1/partner/menu/sync:
+    post:
+      tags: [partner]
+      operationId: syncMenu
+      summary: Полная синхронизация меню
+      description: |
+        Заведение присылает меню целиком. Платформа создаёт новую версию меню
+        `N+1` со статусом `published`, а предыдущую переводит в `archived`.
+        Исторические заказы продолжают ссылаться на позиции старой версии.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MenuSyncRequest"
+      responses:
+        "200":
+          description: Меню синхронизировано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuSyncResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/partner/orders:
+    get:
+      tags: [partner]
+      operationId: listPartnerOrders
+      summary: Очередь заказов заведения
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Фильтр по статусу заказа
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Список заказов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PartnerOrderList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/partner/orders/{public_number}/status:
+    post:
+      tags: [partner]
+      operationId: updateOrderStatus
+      summary: Перевод заказа в новый статус
+      description: |
+        Переход валидируется конечным автоматом заказа. Запись обновляется под
+        оптимистичной блокировкой по полю `version`; при параллельном изменении
+        возвращается `STATE_CONFLICT`.
+      parameters:
+        - $ref: "#/components/parameters/PublicNumber"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderStatusRequest"
+      responses:
+        "200":
+          description: Статус обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: "`STATE_CONFLICT` — недопустимый переход или конфликт версий"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /api/v1/partner/kitchen-status:
+    post:
+      tags: [partner]
+      operationId: setKitchenStatus
+      summary: Переключение режима работы кухни
+      description: |
+        `online` — принимает заказы, `paused` — временная остановка,
+        `closed` — заведение закрыто. В режимах `paused`/`closed` создание
+        заказа отклоняется с `RESTAURANT_UNAVAILABLE`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KitchenStatusRequest"
+      responses:
+        "200":
+          description: Режим переключён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KitchenStatusResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    PartnerToken:
+      type: apiKey
+      in: header
+      name: X-Partner-Token
+      description: Статический токен заведения; в БД хранится его SHA-256 хэш.
+
+  parameters:
+    PublicNumber:
+      name: public_number
+      in: path
+      required: true
+      description: Публичный номер заказа (UUIDv7)
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Отсутствует или неверен партнёрский токен
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Ресурс принадлежит другому заведению
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    Problem:
+      type: object
+      description: Ошибка в формате RFC 7807.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://avito.ru/kitchen/errors/OUT_OF_STOCK
+        title:
+          type: string
+          example: Conflict
+        status:
+          type: integer
+          format: int32
+          example: 409
+        code:
+          $ref: "#/components/schemas/ErrorCode"
+        detail:
+          type: string
+          example: "Товар «Пицца Маргарита» (ключ: pizza_margherita) закончился"
+        instance:
+          type: string
+          example: /api/v1/orders
+        request_id:
+          type: string
+          example: c1f7a8e2-8921-4f3b-87b4-192a6c1a8e10
+
+    ErrorCode:
+      type: string
+      description: Машиночитаемый код ошибки.
+      enum:
+        - BAD_REQUEST
+        - VALIDATION_ERROR
+        - UNAUTHORIZED
+        - FORBIDDEN
+        - RESTAURANT_NOT_FOUND
+        - MENU_NOT_FOUND
+        - ORDER_NOT_FOUND
+        - PRODUCT_UNAVAILABLE
+        - OUT_OF_STOCK
+        - MIN_ORDER_NOT_MET
+        - RESTAURANT_UNAVAILABLE
+        - ORDER_CANNOT_BE_CANCELLED
+        - STATE_CONFLICT
+        - IDEMPOTENCY_KEY_REQUIRED
+        - IDEMPOTENCY_PAYLOAD_MISMATCH
+        - IDEMPOTENCY_IN_PROGRESS
+        - SERVICE_UNAVAILABLE
+        - INTERNAL_ERROR
+
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: dev
+
+    RestaurantStatus:
+      type: string
+      description: Режим работы заведения.
+      enum: [online, paused, closed]
+
+    OrderStatus:
+      type: string
+      description: Статус заказа в жизненном цикле.
+      enum: [NEW, ACCEPTED, REJECTED, COOKING, READY, DELIVERED, CANCELLED]
+
+    Actor:
+      type: string
+      description: Кто инициировал изменение статуса.
+      enum: [user, restaurant, system]
+
+    Restaurant:
+      type: object
+      required:
+        [
+          id,
+          slug,
+          name,
+          status,
+          min_order_kopecks,
+          delivery_fee_kopecks,
+        ]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        slug:
+          type: string
+          example: pizza-avito
+        name:
+          type: string
+          example: Пиццерия Авито
+        status:
+          $ref: "#/components/schemas/RestaurantStatus"
+        min_order_kopecks:
+          type: integer
+          format: int64
+          example: 50000
+        delivery_fee_kopecks:
+          type: integer
+          format: int64
+          example: 15000
+
+    RestaurantPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Restaurant"
+        next_cursor:
+          type: string
+          nullable: true
+          description: Курсор следующей страницы; `null` — данные закончились.
+
+    Product:
+      type: object
+      required:
+        [product_key, category, name, description, price_kopecks, available]
+      properties:
+        product_key:
+          type: string
+          description: Артикул в системе заведения
+          example: pizza_margherita
+        category:
+          type: string
+          example: Пицца
+        name:
+          type: string
+          example: Пицца Маргарита
+        description:
+          type: string
+          example: Томаты, моцарелла, базилик
+        price_kopecks:
+          type: integer
+          format: int64
+          example: 59000
+        available:
+          type: boolean
+        stock_qty:
+          type: integer
+          format: int32
+          nullable: true
+          description: Остаток; `null` — запас не ограничен.
+
+    MenuCategory:
+      type: object
+      required: [name, products]
+      properties:
+        name:
+          type: string
+          example: Пицца
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+
+    RestaurantMenu:
+      type: object
+      required: [restaurant, menu_version, categories]
+      properties:
+        restaurant:
+          $ref: "#/components/schemas/Restaurant"
+        menu_version:
+          type: integer
+          format: int32
+          example: 2
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/MenuCategory"
+
+    CreateOrderItem:
+      type: object
+      required: [product_key, qty]
+      properties:
+        product_key:
+          type: string
+          minLength: 1
+          maxLength: 64
+          example: pizza_margherita
+        qty:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          example: 2
+
+    CreateOrderRequest:
+      type: object
+      required: [user_external_id, restaurant_id, delivery_address, items]
+      properties:
+        user_external_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Идентификатор пользователя в экосистеме Авито
+          example: usr_123
+        restaurant_id:
+          type: integer
+          format: int64
+          example: 1
+        delivery_address:
+          type: string
+          minLength: 1
+          maxLength: 512
+          example: "ул. Ленина, 10"
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/CreateOrderItem"
+
+    CancelOrderRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 512
+          example: Передумал
+
+    OrderItem:
+      type: object
+      description: Снапшот позиции на момент оформления заказа.
+      required:
+        [product_key, name, unit_price_kopecks, qty, line_total_kopecks]
+      properties:
+        product_key:
+          type: string
+          example: pizza_margherita
+        name:
+          type: string
+          example: Пицца Маргарита
+        unit_price_kopecks:
+          type: integer
+          format: int64
+          example: 59000
+        qty:
+          type: integer
+          format: int32
+          example: 2
+        line_total_kopecks:
+          type: integer
+          format: int64
+          example: 118000
+
+    OrderStatusEvent:
+      type: object
+      required: [from_status, to_status, actor, comment, created_at]
+      properties:
+        from_status:
+          type: string
+          description: Пустая строка для самого первого события.
+          example: NEW
+        to_status:
+          type: string
+          example: ACCEPTED
+        actor:
+          $ref: "#/components/schemas/Actor"
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required:
+        [
+          public_number,
+          restaurant_id,
+          restaurant_slug,
+          user_external_id,
+          status,
+          delivery_address,
+          items,
+          subtotal_kopecks,
+          delivery_fee_kopecks,
+          total_kopecks,
+          created_at,
+          updated_at,
+          timeline,
+        ]
+      properties:
+        public_number:
+          type: string
+          format: uuid
+        restaurant_id:
+          type: integer
+          format: int64
+        restaurant_slug:
+          type: string
+        user_external_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        delivery_address:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        subtotal_kopecks:
+          type: integer
+          format: int64
+        delivery_fee_kopecks:
+          type: integer
+          format: int64
+        total_kopecks:
+          type: integer
+          format: int64
+        cancel_reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        timeline:
+          type: array
+          description: История переходов статусов, от старых к новым.
+          items:
+            $ref: "#/components/schemas/OrderStatusEvent"
+
+    MenuSyncProduct:
+      type: object
+      required: [product_key, category, name, price_kopecks]
+      properties:
+        product_key:
+          type: string
+          minLength: 1
+          maxLength: 64
+        category:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 4096
+          default: ""
+        price_kopecks:
+          type: integer
+          format: int64
+          minimum: 0
+        available:
+          type: boolean
+          default: true
+        stock_qty:
+          type: integer
+          format: int32
+          minimum: 0
+          nullable: true
+          description: "`null` — неограниченный запас."
+
+    MenuSyncRequest:
+      type: object
+      required: [products]
+      properties:
+        products:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/MenuSyncProduct"
+
+    MenuSyncResponse:
+      type: object
+      required: [version, items_synced]
+      properties:
+        version:
+          type: integer
+          format: int32
+          example: 2
+        items_synced:
+          type: integer
+          format: int32
+          example: 15
+
+    PartnerOrderList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+
+    UpdateOrderStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        comment:
+          type: string
+          maxLength: 512
+          default: ""
+
+    KitchenStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/RestaurantStatus"
+
+    KitchenStatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/RestaurantStatus"
+
+security:
+  - PartnerToken: []
