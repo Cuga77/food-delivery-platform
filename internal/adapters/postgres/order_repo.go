@@ -75,7 +75,8 @@ func (r *OrderRepo) Create(ctx context.Context, order *domain.Order) error {
 	return nil
 }
 
-// insertItems вставляет позиции одним запросом и возвращает присвоенные им id.
+// insertItems вставляет позиции заказа одним запросом через unnest:
+// количество round-trip'ов не зависит от размера корзины.
 func (r *OrderRepo) insertItems(ctx context.Context, order *domain.Order) error {
 	if len(order.Items) == 0 {
 		return nil
@@ -88,10 +89,7 @@ func (r *OrderRepo) insertItems(ctx context.Context, order *domain.Order) error 
 		SELECT $1, t.product_id, t.product_key, t.name, t.unit_price, t.qty, t.line_total
 		FROM unnest($2::bigint[], $3::text[], $4::text[],
 		            $5::bigint[], $6::int[], $7::bigint[])
-		     WITH ORDINALITY
-		     AS t(product_id, product_key, name, unit_price, qty, line_total, ord)
-		ORDER BY t.ord
-		RETURNING id`
+		     AS t(product_id, product_key, name, unit_price, qty, line_total)`
 
 	n := len(order.Items)
 	var (
@@ -111,26 +109,10 @@ func (r *OrderRepo) insertItems(ctx context.Context, order *domain.Order) error 
 		lineTotals[i] = item.LineTotalKopecks
 	}
 
-	rows, err := r.db(ctx).Query(ctx, query, order.ID,
-		productIDs, keys, names, prices, quantities, lineTotals)
-	if err != nil {
+	if _, err := r.db(ctx).Exec(ctx, query, order.ID,
+		productIDs, keys, names, prices, quantities, lineTotals,
+	); err != nil {
 		return wrapDBError(err, "вставка позиций заказа")
-	}
-	defer rows.Close()
-
-	idx := 0
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return wrapDBError(err, "чтение идентификаторов позиций заказа")
-		}
-		if idx < n {
-			order.Items[idx].ID = id
-		}
-		idx++
-	}
-	if err := rows.Err(); err != nil {
-		return wrapDBError(err, "обход вставленных позиций заказа")
 	}
 
 	return nil
@@ -319,7 +301,7 @@ func (r *OrderRepo) itemsByOrders(ctx context.Context, orderIDs []int64) (map[in
 		SELECT order_id, id, product_id, product_key, product_name_snapshot,
 		       unit_price_kopecks, qty, line_total_kopecks
 		FROM order_items
-		WHERE order_id = ANY($1)
+		WHERE order_id = ANY($1::bigint[])
 		ORDER BY order_id, id`
 
 	rows, err := r.db(ctx).Query(ctx, query, orderIDs)
@@ -353,7 +335,7 @@ func (r *OrderRepo) timelineByOrders(ctx context.Context, orderIDs []int64) (map
 	const query = `
 		SELECT order_id, id, from_status, to_status, actor, comment, created_at
 		FROM order_status_events
-		WHERE order_id = ANY($1)
+		WHERE order_id = ANY($1::bigint[])
 		ORDER BY order_id, id`
 
 	rows, err := r.db(ctx).Query(ctx, query, orderIDs)
