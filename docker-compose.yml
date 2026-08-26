@@ -1,0 +1,121 @@
+# Локальное окружение Авито.Кухня целиком: база, миграции, API и заведение.
+#
+# Порядок запуска задан условиями готовности, а не паузами: migrate стартует
+# только после того, как postgres реально принимает соединения, а api — только
+# после успешного применения миграций. Благодаря этому `docker compose up`
+# воспроизводимо поднимает рабочий стек с первого раза.
+
+name: avito-kitchen
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: kitchen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kitchen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kitchen}
+      POSTGRES_DB: ${POSTGRES_DB:-kitchen}
+      # Ускоряет инициализацию тома; для локального окружения безопасно.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kitchen} -d ${POSTGRES_DB:-kitchen}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+  # Одноразовый контейнер: применяет миграции и завершается. Схема БД никогда
+  # не создаётся самим приложением — это отдельный, наблюдаемый шаг.
+  migrate:
+    image: migrate/migrate:v4.19.1
+    container_name: kitchen-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint:
+      - migrate
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-kitchen}:${POSTGRES_PASSWORD:-kitchen}@postgres:5432/${POSTGRES_DB:-kitchen}?sslmode=disable
+    command: ["up"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+      args:
+        SERVICE: api
+        VERSION: ${VERSION:-dev}
+    container_name: kitchen-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      API_PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-kitchen}:${POSTGRES_PASSWORD:-kitchen}@postgres:5432/${POSTGRES_DB:-kitchen}?sslmode=disable
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-10}
+      DB_MIN_CONNS: ${DB_MIN_CONNS:-2}
+      OUTBOX_POLL_INTERVAL: ${OUTBOX_POLL_INTERVAL:-500ms}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+      OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-10}
+      OUTBOX_HTTP_TIMEOUT: ${OUTBOX_HTTP_TIMEOUT:-5s}
+      REAPER_INTERVAL: ${REAPER_INTERVAL:-30s}
+      ORDER_ACCEPT_TIMEOUT: ${ORDER_ACCEPT_TIMEOUT:-5m}
+      IDEMPOTENCY_TTL: ${IDEMPOTENCY_TTL:-24h}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  restaurant-sim:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+      args:
+        SERVICE: restaurant-sim
+        VERSION: ${VERSION:-dev}
+    container_name: kitchen-restaurant-sim
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SIM_PORT: 8081
+      SIM_API_BASE_URL: http://api:8080
+      # Токен демо-заведения; в БД хранится только его SHA-256 (см. миграцию 000002).
+      SIM_PARTNER_TOKEN: ${SIM_PARTNER_TOKEN:-dev-partner-token}
+      SIM_RESTAURANT_SLUG: ${SIM_RESTAURANT_SLUG:-pizza-avito}
+      SIM_AUTO_ACCEPT: ${SIM_AUTO_ACCEPT:-true}
+      SIM_REJECT_ALL: ${SIM_REJECT_ALL:-false}
+      SIM_SYNC_MENU_ON_START: ${SIM_SYNC_MENU_ON_START:-true}
+      SIM_ACCEPT_DELAY_MS: ${SIM_ACCEPT_DELAY_MS:-1000}
+      SIM_COOKING_TIME_MS: ${SIM_COOKING_TIME_MS:-3000}
+      SIM_READY_DELAY_MS: ${SIM_READY_DELAY_MS:-2000}
+    ports:
+      - "${SIM_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8081/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  postgres-data:
