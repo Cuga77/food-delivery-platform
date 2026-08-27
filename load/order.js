@@ -32,20 +32,39 @@ const ordersCreated = new Counter('orders_created');
 const orderCreateDuration = new Trend('order_create_duration', true);
 const orderRejected = new Rate('orders_rejected');
 
+// PROFILE=constant включает постоянную интенсивность вместо разгона ступенями.
+//
+// Для одиночного прогона удобнее ступени: видно, как сервис входит в нагрузку.
+// Для развёртки (load/sweep.sh) нужна ровная полка — иначе средняя за прогон
+// оказывается ниже цели просто из-за формы ступеней, и «недобор» невозможно
+// отличить от насыщения.
+const CONSTANT = (__ENV.PROFILE || '') === 'constant';
+
+const rampingScenario = {
+  executor: 'ramping-arrival-rate',
+  startRate: Math.max(1, Math.floor(RATE / 5)),
+  timeUnit: '1s',
+  preAllocatedVUs: Math.max(10, RATE),
+  maxVUs: Math.max(50, RATE * 4),
+  stages: [
+    { target: RATE, duration: '10s' }, // разгон
+    { target: RATE, duration: DURATION }, // плато
+    { target: 0, duration: '5s' }, // остановка
+  ],
+};
+
+const constantScenario = {
+  executor: 'constant-arrival-rate',
+  rate: RATE,
+  timeUnit: '1s',
+  duration: DURATION,
+  preAllocatedVUs: Math.max(20, RATE),
+  maxVUs: Math.max(100, RATE * 4),
+};
+
 export const options = {
   scenarios: {
-    order: {
-      executor: 'ramping-arrival-rate',
-      startRate: Math.max(1, Math.floor(RATE / 5)),
-      timeUnit: '1s',
-      preAllocatedVUs: Math.max(10, RATE),
-      maxVUs: Math.max(50, RATE * 4),
-      stages: [
-        { target: RATE, duration: '10s' }, // разгон
-        { target: RATE, duration: DURATION }, // плато
-        { target: 0, duration: '5s' }, // остановка
-      ],
-    },
+    order: CONSTANT ? constantScenario : rampingScenario,
   },
   thresholds: {
     // Оформление — транзакция на пять вставок; полсекунды на p95 — потолок,
