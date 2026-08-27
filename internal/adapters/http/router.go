@@ -74,6 +74,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		MaxAge:         300,
 	}))
 	r.Use(chimw.Timeout(cfg.RequestTimeout))
+	r.Use(allowHeadOnProbes)
 
 	// Прослойки, действующие не на весь API, а на конкретные маршруты.
 	// Генератор умеет добавлять middleware только глобально, поэтому область
@@ -111,13 +112,38 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		problem.WriteCode(w, r, domain.CodeBadRequest, "маршрут не найден")
+		problem.WriteCode(w, r, domain.CodeRouteNotFound, "маршрут не найден")
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		problem.WriteCode(w, r, domain.CodeBadRequest, "метод не поддерживается для этого маршрута")
+		problem.WriteCode(w, r, domain.CodeMethodNotAllowed,
+			"метод не поддерживается для этого маршрута")
 	})
 
 	return r
+}
+
+// allowHeadOnProbes пропускает HEAD-запросы к пробам живости и готовности.
+//
+// Контракт описывает /health и /readyz как GET, а chi, в отличие от
+// http.ServeMux, не отвечает на HEAD автоматически. Между тем пробы сплошь и
+// рядом ходят именно HEAD — так делает `wget --spider`, которым проверяется
+// контейнер, — и RFC 9110 требует, чтобы HEAD работал везде, где работает GET.
+//
+// Подменять достаточно метод: тело ответа для HEAD net/http отбрасывает сам.
+func allowHeadOnProbes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && isProbePath(r.URL.Path) {
+			asGet := r.Clone(r.Context())
+			asGet.Method = http.MethodGet
+			next.ServeHTTP(w, asGet)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isProbePath(path string) bool {
+	return path == healthPath || path == readinessPath
 }
 
 // scoped применяет прослойку только к запросам, для которых предикат истинен.
@@ -137,6 +163,8 @@ func scoped(matches func(*http.Request) bool, mw func(http.Handler) http.Handler
 const (
 	partnerPathPrefix = "/api/v1/partner/"
 	createOrderPath   = "/api/v1/orders"
+	healthPath        = "/health"
+	readinessPath     = "/readyz"
 )
 
 func isPartnerRequest(r *http.Request) bool {

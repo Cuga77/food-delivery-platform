@@ -13,8 +13,13 @@ type ErrorCode string
 const (
 	CodeBadRequest      ErrorCode = "BAD_REQUEST"
 	CodeValidationError ErrorCode = "VALIDATION_ERROR"
-	CodeUnauthorized    ErrorCode = "UNAUTHORIZED"
-	CodeForbidden       ErrorCode = "FORBIDDEN"
+	// CodeRouteNotFound и CodeMethodNotAllowed — транспортные ситуации: такого
+	// маршрута нет или он не поддерживает этот метод. Доменного смысла у них нет,
+	// но клиенту нужен машиночитаемый код, как и у остальных ошибок.
+	CodeRouteNotFound    ErrorCode = "ROUTE_NOT_FOUND"
+	CodeMethodNotAllowed ErrorCode = "METHOD_NOT_ALLOWED"
+	CodeUnauthorized     ErrorCode = "UNAUTHORIZED"
+	CodeForbidden        ErrorCode = "FORBIDDEN"
 
 	CodeRestaurantNotFound ErrorCode = "RESTAURANT_NOT_FOUND"
 	CodeMenuNotFound       ErrorCode = "MENU_NOT_FOUND"
