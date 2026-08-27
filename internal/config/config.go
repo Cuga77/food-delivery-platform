@@ -23,6 +23,7 @@ type Config struct {
 	Outbox  OutboxConfig
 	Reaper  ReaperConfig
 	Idempot IdempotencyConfig
+	Web     WebConfig
 }
 
 // HTTPConfig — параметры HTTP-сервера.
@@ -67,6 +68,13 @@ type IdempotencyConfig struct {
 	TTL time.Duration
 }
 
+// WebConfig — параметры серверного веб-клиента.
+type WebConfig struct {
+	// SecureCookies помечает cookie сессии заведения флагом Secure.
+	// Включать за TLS; на локальном HTTP браузер такую cookie не сохранит.
+	SecureCookies bool
+}
+
 // Load собирает конфигурацию из окружения.
 //
 // Ошибки не возвращаются по одной: собираются все сразу, чтобы за один запуск
@@ -108,6 +116,9 @@ func Load() (Config, error) {
 		},
 		Idempot: IdempotencyConfig{
 			TTL: getDuration("IDEMPOTENCY_TTL", 24*time.Hour, &errs),
+		},
+		Web: WebConfig{
+			SecureCookies: getBool("WEB_SECURE_COOKIES", false, &errs),
 		},
 	}
 
@@ -190,6 +201,20 @@ func getInt32(key string, fallback int32, errs *[]error) int32 {
 		return fallback
 	}
 	return int32(value)
+}
+
+func getBool(key string, fallback bool, errs *[]error) bool {
+	raw, ok := os.LookupEnv(key)
+	if !ok || raw == "" {
+		return fallback
+	}
+
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		*errs = append(*errs, fmt.Errorf("%s: ожидалось true/false, получено %q", key, raw))
+		return fallback
+	}
+	return value
 }
 
 func getDuration(key string, fallback time.Duration, errs *[]error) time.Duration {

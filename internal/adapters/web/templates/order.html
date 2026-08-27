@@ -1,0 +1,95 @@
+{{define "page:order"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container">
+  <a href="/restaurants">&larr; Все заведения</a>
+
+  {{/*
+    Карточка вынесена во фрагмент и обновляется на месте: htmx подменяет
+    только её содержимое, поэтому документ не вкладывается сам в себя.
+  */}}
+  <div id="order-detail"
+       {{if .Live}}
+       hx-get="/orders/{{.Order.PublicNumber}}"
+       hx-trigger="every 3s"
+       hx-target="#order-detail"
+       hx-swap="innerHTML"
+       {{end}}>
+    {{template "partial:order-detail" .}}
+  </div>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}
+
+{{define "partial:order-detail"}}
+<h1>Заказ {{shortID .Order.PublicNumber.String}}</h1>
+
+<p>
+  <span class="badge badge-{{orderStatusColor .Order.Status}}">{{orderStatusLabel .Order.Status}}</span>
+  &middot; <a href="/restaurants/{{.Order.RestaurantSlug}}">{{.Order.RestaurantSlug}}</a>
+  {{if .Live}}<span class="meta">&middot; статус обновляется автоматически</span>{{end}}
+</p>
+
+<div class="panel">
+  <p><strong>Адрес:</strong> {{.Order.DeliveryAddress}}</p>
+  <p><strong>Оформлен:</strong> {{.Order.CreatedAt.Format "02.01.2006 15:04"}}</p>
+  {{if .Order.CancelReason}}
+  <p><strong>Причина отмены:</strong> {{.Order.CancelReason}}</p>
+  {{end}}
+
+  <table>
+    <thead>
+      <tr><th>Блюдо</th><th>Цена</th><th>Кол-во</th><th>Сумма</th></tr>
+    </thead>
+    <tbody>
+      {{range .Order.Items}}
+      <tr>
+        <td>{{.ProductNameSnapshot}}</td>
+        <td>{{money .UnitPriceKopecks}}</td>
+        <td>{{.Qty}}</td>
+        <td>{{money .LineTotalKopecks}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="3">Блюда</td><td>{{money .Order.SubtotalKopecks}}</td></tr>
+      <tr><td colspan="3">Доставка</td><td>{{money .Order.DeliveryFeeKopecks}}</td></tr>
+      <tr><td colspan="3"><strong>Итого</strong></td><td><strong>{{money .Order.TotalKopecks}}</strong></td></tr>
+    </tfoot>
+  </table>
+  <p class="meta">
+    Цены и названия зафиксированы на момент оформления и не меняются при
+    обновлении меню заведением.
+  </p>
+</div>
+
+{{if .CanCancel}}
+<form action="/orders/{{.Order.PublicNumber}}/cancel" method="POST" style="margin-top:1.5rem">
+  <label for="reason">Причина отмены</label>
+  <input type="text" id="reason" name="reason" placeholder="Передумал">
+  <button type="submit" class="secondary outline">Отменить заказ</button>
+  <p class="meta">Отменить самостоятельно можно, пока заведение не приняло заказ.</p>
+</form>
+{{end}}
+
+<h3 style="margin-top:2rem">История</h3>
+<ul class="timeline">
+  {{range .Order.Timeline}}
+  <li>
+    <div>
+      {{if .FromStatus}}{{orderStatusLabel .FromStatus}} &rarr; {{end}}
+      <span class="badge badge-{{orderStatusColor .ToStatus}}">{{orderStatusLabel .ToStatus}}</span>
+    </div>
+    <div class="time">
+      {{actorLabel .Actor}} &middot; {{.CreatedAt.Format "02.01.2006 15:04:05"}}
+      {{if .Comment}} &middot; {{.Comment}}{{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}

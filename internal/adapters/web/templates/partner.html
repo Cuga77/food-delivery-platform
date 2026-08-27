@@ -1,0 +1,145 @@
+{{define "page:partner-login"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container" style="max-width:36rem">
+  <h1>Кабинет заведения</h1>
+
+  {{if .Notice}}<div class="notice">{{.Notice}}</div>{{end}}
+  {{if .Error}}<div class="notice error">{{.Error}}</div>{{end}}
+
+  <form action="/partner/login" method="POST">
+    <label for="token">Партнёрский токен</label>
+    <input type="password" id="token" name="token" required autocomplete="off"
+           placeholder="выдаётся площадкой при подключении">
+    <button type="submit">Войти</button>
+  </form>
+
+  <p class="meta">
+    Тот же токен, что и в заголовке <code>X-Partner-Token</code> у B2B API:
+    у панели и у интеграции одна модель доступа. В базе хранится только его
+    SHA-256.
+  </p>
+  <p class="meta">
+    Демо-окружение: заведение <code>pizza-avito</code>, токен
+    <code>dev-partner-token</code>.
+  </p>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}
+
+{{define "page:partner-panel"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container">
+  <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap">
+    <h1 style="margin-bottom:.5rem">{{.Restaurant.Name}}</h1>
+    <span class="badge badge-{{restaurantStatusColor .Restaurant.Status}}">{{restaurantStatusLabel .Restaurant.Status}}</span>
+    <span class="spacer" style="flex:1"></span>
+    <form action="/partner/logout" method="POST" style="margin:0">
+      <button type="submit" class="outline secondary" style="margin:0;font-size:.85em">Выйти</button>
+    </form>
+  </div>
+
+  <p class="meta">
+    Панель показывает только ваше заведение: идентификатор берётся из сессии,
+    а не из адреса или формы.
+  </p>
+
+  <h3>Режим кухни</h3>
+  <div class="toolbar">
+    {{/* Идентификатор заведения в форме не передаётся — он известен из сессии. */}}
+    <form action="/partner/kitchen-status" method="POST">
+      <button type="submit" name="status" value="online" class="outline">Открыть</button>
+    </form>
+    <form action="/partner/kitchen-status" method="POST">
+      <button type="submit" name="status" value="paused" class="outline secondary">Пауза</button>
+    </form>
+    <form action="/partner/kitchen-status" method="POST">
+      <button type="submit" name="status" value="closed" class="outline secondary">Закрыть</button>
+    </form>
+  </div>
+
+  <h3>Очередь заказов</h3>
+  <div class="toolbar">
+    <a role="button" class="outline{{if .Status}} secondary{{end}}" href="/partner">Все</a>
+    <a role="button" class="outline{{if ne .Status "NEW"}} secondary{{end}}" href="/partner?status=NEW">Новые</a>
+    <a role="button" class="outline{{if ne .Status "ACCEPTED"}} secondary{{end}}" href="/partner?status=ACCEPTED">Принятые</a>
+    <a role="button" class="outline{{if ne .Status "COOKING"}} secondary{{end}}" href="/partner?status=COOKING">Готовятся</a>
+    <a role="button" class="outline{{if ne .Status "READY"}} secondary{{end}}" href="/partner?status=READY">Готовые</a>
+  </div>
+
+  {{/* Очередь обновляется на месте: новые заказы приходят от клиентов постоянно. */}}
+  <div id="partner-orders"
+       hx-get="/partner/orders{{if .Status}}?status={{.Status}}{{end}}"
+       hx-trigger="every 5s"
+       hx-target="#partner-orders"
+       hx-swap="innerHTML">
+    {{template "partial:partner-orders" .}}
+  </div>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}
+
+{{define "partial:partner-orders"}}
+{{if .Orders}}
+<table>
+  <thead>
+    <tr>
+      <th>Заказ</th><th>Статус</th><th>Адрес</th><th>Сумма</th><th>Время</th><th>Действие</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Orders}}
+    <tr>
+      <td><a href="/orders/{{.PublicNumber}}">{{shortID .PublicNumber.String}}</a></td>
+      <td><span class="badge badge-{{orderStatusColor .Status}}">{{orderStatusLabel .Status}}</span></td>
+      <td>{{.DeliveryAddress}}</td>
+      <td>{{money .TotalKopecks}}</td>
+      <td>{{.CreatedAt.Format "15:04"}}</td>
+      <td class="row-actions">
+        {{/*
+          Кнопки соответствуют разрешённым переходам конечного автомата.
+          Даже если разметка разойдётся с доменом, недопустимый переход
+          будет отклонён на сервере с кодом STATE_CONFLICT.
+        */}}
+        {{if isOrderStatus .Status "NEW"}}
+          {{template "partial:status-button" dict "Order" . "To" "ACCEPTED" "Label" "Принять" "Filter" $.Status}}
+          {{template "partial:status-button" dict "Order" . "To" "REJECTED" "Label" "Отклонить" "Filter" $.Status}}
+        {{else if isOrderStatus .Status "ACCEPTED"}}
+          {{template "partial:status-button" dict "Order" . "To" "COOKING" "Label" "Готовить" "Filter" $.Status}}
+          {{template "partial:status-button" dict "Order" . "To" "CANCELLED" "Label" "Отменить" "Filter" $.Status}}
+        {{else if isOrderStatus .Status "COOKING"}}
+          {{template "partial:status-button" dict "Order" . "To" "READY" "Label" "Готово" "Filter" $.Status}}
+          {{template "partial:status-button" dict "Order" . "To" "CANCELLED" "Label" "Отменить" "Filter" $.Status}}
+        {{else if isOrderStatus .Status "READY"}}
+          {{template "partial:status-button" dict "Order" . "To" "DELIVERED" "Label" "Доставлен" "Filter" $.Status}}
+        {{else}}
+          <span class="meta">—</span>
+        {{end}}
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<div class="empty">Заказов нет</div>
+{{end}}
+{{end}}
+
+{{define "partial:status-button"}}
+<form action="/partner/orders/{{.Order.PublicNumber}}/status" method="POST">
+  <input type="hidden" name="status" value="{{.To}}">
+  <input type="hidden" name="filter_status" value="{{.Filter}}">
+  <button type="submit" class="outline">{{.Label}}</button>
+</form>
+{{end}}

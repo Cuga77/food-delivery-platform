@@ -74,6 +74,7 @@ services:
       REAPER_INTERVAL: ${REAPER_INTERVAL:-30s}
       ORDER_ACCEPT_TIMEOUT: ${ORDER_ACCEPT_TIMEOUT:-5m}
       IDEMPOTENCY_TTL: ${IDEMPOTENCY_TTL:-24h}
+      WEB_SECURE_COOKIES: ${WEB_SECURE_COOKIES:-false}
     ports:
       - "${API_PORT:-8080}:8080"
     healthcheck:

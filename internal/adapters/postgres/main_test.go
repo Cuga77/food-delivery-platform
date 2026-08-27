@@ -12,6 +12,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -190,6 +192,14 @@ func (e *testEnv) stockOf(t testing.TB, productID int64) *int32 {
 }
 
 func ptrInt32(v int32) *int32 { return &v }
+
+// testHash возвращает хэш той же формы, что и боевой код: ровно 64 hex-символа.
+// Короткие строки сюда подставлять нельзя — request_hash имеет тип CHAR(64) и
+// дополняет значение пробелами до фиксированной длины.
+func testHash(payload string) string {
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

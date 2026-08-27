@@ -51,6 +51,12 @@ make gen
 | `internal/adapters/http/partner_handler.go` | B2B: всё под `/api/v1/partner/` |
 | `internal/adapters/http/health_handler.go` | `/health`, `/readyz` |
 
+**Веб-клиент — отдельный транспорт.** Страницы в `internal/adapters/web` не
+ходят в JSON API: они вызывают те же use cases напрямую. Новая возможность,
+которую должен показывать веб-клиент, добавляется в `internal/app`, а потом
+подключается к обоим транспортам независимо. Менять контракт ради страницы не
+нужно.
+
 Хендлер обязан оставаться тонким: разобрать вход → вызвать use case → отдать
 результат. **Бизнес-правил в нём нет** — они живут в `internal/app` и
 `internal/domain`.

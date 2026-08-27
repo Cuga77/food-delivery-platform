@@ -1,0 +1,55 @@
+{{define "page:restaurants"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container">
+  <h1>Заведения</h1>
+  <p class="meta">
+    Закрытые заведения остаются в списке: так понятно, что они существуют и
+    откроются позже, а не пропали с площадки.
+  </p>
+
+  <div id="restaurants">
+    {{template "partial:restaurant-cards" .}}
+  </div>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}
+
+{{/*
+  Фрагмент со списком и кнопкой подгрузки.
+
+  Кнопка заменяет сама себя (hx-swap="outerHTML"), а карточки дописываются
+  перед ней — так htmx добавляет следующую страницу, не вкладывая документ
+  в документ. Без JavaScript кнопка остаётся обычной ссылкой на ту же выдачу.
+*/}}
+{{define "partial:restaurant-cards"}}
+{{range .Restaurants}}
+<a class="card-link" href="/restaurants/{{.Slug}}">
+  <h3>{{.Name}}</h3>
+  <div class="meta">
+    <span class="badge badge-{{restaurantStatusColor .Status}}">{{restaurantStatusLabel .Status}}</span>
+    &middot; минимальный заказ {{money .MinOrderKopecks}}
+    &middot; доставка {{money .DeliveryFeeKopecks}}
+  </div>
+</a>
+{{else}}
+<div class="empty">Заведений пока нет</div>
+{{end}}
+
+{{if .NextCursor}}
+<div style="text-align:center" id="load-more">
+  <a role="button" class="outline"
+     href="/restaurants?cursor={{.NextCursor}}"
+     hx-get="/restaurants?cursor={{.NextCursor}}"
+     hx-target="#load-more"
+     hx-swap="outerHTML">
+    Показать ещё
+  </a>
+</div>
+{{end}}
+{{end}}

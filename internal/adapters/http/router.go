@@ -10,6 +10,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"avito-kitchen/internal/adapters/web"
 	"avito-kitchen/internal/app"
 	"avito-kitchen/internal/domain"
 	"avito-kitchen/internal/gen"
@@ -36,6 +37,7 @@ func NewServer(client *ClientHandler, partner *PartnerHandler, health *HealthHan
 // RouterConfig — зависимости и параметры сборки маршрутизатора.
 type RouterConfig struct {
 	Server         *Server
+	WebHandler     *web.Handler
 	PartnerAuth    middleware.PartnerAuthenticator
 	Idempotency    app.IdempotencyRepo
 	IdempotencyTTL time.Duration
@@ -102,6 +104,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				"некорректные параметры запроса: "+err.Error())
 		},
 	})
+
+	// Серверные страницы (HTMX + Go templates).
+	if cfg.WebHandler != nil {
+		cfg.WebHandler.Mount(r)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		problem.WriteCode(w, r, domain.CodeBadRequest, "маршрут не найден")

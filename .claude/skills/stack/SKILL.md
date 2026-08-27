@@ -25,6 +25,10 @@ curl -sf http://localhost:8081/health   # restaurant-sim жив
 
 Порты: `api` — 8080, `restaurant-sim` — 8081, `postgres` — 5432.
 
+На 8080 живут сразу три вещи: веб-клиент (`/`, `/restaurants`, `/orders/...`),
+кабинет заведения (`/partner`, вход по токену `dev-partner-token`) и JSON API
+(`/api/v1/...`).
+
 ## Чистый прогон с нуля
 
 Это единственный надёжный способ проверить, что стек поднимается «с нуля», —
@@ -52,6 +56,27 @@ docker compose logs migrate          # если api не стартует — с
 
 ```bash
 docker compose logs api | grep '<request_id из заголовка X-Request-Id>'
+```
+
+## Проверить страницы
+
+```bash
+curl -s localhost:8080/restaurants | head -40      # витрина
+curl -s localhost:8080/restaurants/pizza-avito | grep -c 'name="qty_'
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' localhost:8080/partner
+```
+
+Признак сломанного шаблона — ответ 200 с пустым или крошечным телом. Обработчик
+проверяет наличие шаблонов на старте, поэтому опечатка в имени валит сервис при
+запуске, а не отдаёт пустую страницу; если тело всё же пустое, смотреть
+`docker compose logs api` на строку «не удалось отрендерить шаблон».
+
+Вход в кабинет заведения:
+
+```bash
+curl -s -c /tmp/kitchen.cookies -X POST localhost:8080/partner/login \
+  -d 'token=dev-partner-token'
+curl -s -b /tmp/kitchen.cookies localhost:8080/partner | head -40
 ```
 
 ## Ручные запросы
