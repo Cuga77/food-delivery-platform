@@ -1,0 +1,30 @@
+{{define "page:error"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container" style="max-width:40rem">
+  <h1>{{.Title}}</h1>
+
+  {{/*
+    Показывается текст доменной ошибки: он написан для человека и объясняет,
+    что именно пошло не так («осталось 5, а запрошено 12»). Внутренние сбои
+    наружу не раскрываются — для них выводится нейтральное сообщение, а
+    подробности остаются в логах.
+  */}}
+  <div class="notice error">{{.Message}}</div>
+
+  {{if .BackURL}}
+  <p><a role="button" href="{{.BackURL}}">{{.BackLabel}}</a></p>
+  {{end}}
+
+  <p class="meta">
+    Код ошибки: <code>{{.Code}}</code> &middot; HTTP {{.Status}}
+    {{if .IsInternal}}<br>Если это повторится, сообщите нам код ошибки.{{end}}
+  </p>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}

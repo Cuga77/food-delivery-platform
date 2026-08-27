@@ -27,7 +27,8 @@ CREATE TABLE restaurants (
 );
 
 COMMENT ON COLUMN restaurants.provider_base_url IS 'Базовый URL сервиса заведения для доставки вебхуков';
-COMMENT ON COLUMN restaurants.api_key_hash IS 'SHA-256 партнёрского токена в hex; сам токен не хранится';
+COMMENT ON COLUMN restaurants.api_key_hash IS
+    'SHA-256 партнёрского токена в hex; сам токен не хранится. Тип CHAR(64) фиксирует ширину: hex-представление SHA-256 всегда ровно 64 символа';
 
 -- Аутентификация партнёра — поиск строго по хэшу токена.
 CREATE UNIQUE INDEX idx_restaurants_api_key_hash ON restaurants (api_key_hash);
@@ -144,7 +145,8 @@ CREATE TABLE idempotency_keys (
 
 COMMENT ON COLUMN idempotency_keys.response_status IS
     '0 — операция выполняется прямо сейчас; ответ ещё не зафиксирован';
-COMMENT ON COLUMN idempotency_keys.request_hash IS 'SHA-256 канонизированного тела запроса';
+COMMENT ON COLUMN idempotency_keys.request_hash IS
+    'SHA-256 тела запроса в hex. Внимание: CHAR(64) дополняет значение пробелами справа, поэтому сюда допустимы только строки ровно из 64 символов';
 
 -- Уборка протухших ключей фоновым reaper-ом.
 CREATE INDEX idx_idempotency_expires ON idempotency_keys (expires_at);

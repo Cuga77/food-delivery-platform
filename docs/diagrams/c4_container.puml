@@ -38,11 +38,11 @@ title Авито.Кухня — C4 Level 2: контейнеры
 actor "Пользователь" as user
 actor "Оператор\nзаведения" as operator
 
-rectangle "Веб-клиент\n<size:10>[SPA, вне scope MVP]</size>\n\nВитрина заведений, корзина,\nотслеживание заказа" as web #6B7A8C
-
 package "Авито.Кухня" {
 
-  rectangle "**api**\n<size:10>[Go 1.25, chi, oapi-codegen]</size>\n\nB2C и B2B HTTP API.\nВся бизнес-логика и границы\nтранзакций живут здесь." as api
+  rectangle "**api**\n<size:10>[Go 1.25, chi, oapi-codegen]</size>\n\nB2C и B2B JSON API.\nВся бизнес-логика и границы\nтранзакций живут здесь." as api
+
+  rectangle "**веб-клиент**\n<size:10>[Go html/template + htmx,\nвнутри процесса api]</size>\n\nВитрина, корзина, карточка заказа,\nкабинет заведения.\nВторой транспорт над теми же\nuse cases, а не второй бэкенд." as web #3C6E71
 
   rectangle "**outbox-воркер**\n<size:10>[Go, горутина внутри api]</size>\n\nЗабирает события под\nSKIP LOCKED и доставляет их\nзаведениям с backoff" as outbox
 
@@ -55,9 +55,10 @@ package "Авито.Кухня" {
 
 rectangle "**restaurant-sim**\n<size:10>[Go 1.25, chi]</size>\n\nСервис заведения: эталонное меню,\nприём вебхуков, управление\nстатусами заказов" as sim #3C6E71
 
-user --> web : оформляет заказ\n<size:10>[HTTPS]</size>
-web --> api : REST, JSON\n<size:10>[HTTP/1.1, :8080]</size>
+user --> web : оформляет заказ\n<size:10>[HTTP, серверные страницы]</size>
+web --> api : прямой вызов use cases\n<size:10>[в одном процессе]</size>
 
+operator --> web : кабинет заведения\n<size:10>[вход по партнёрскому токену,\nHttpOnly-cookie]</size>
 operator --> sim : открывает/закрывает кухню
 sim --> api : B2B API: menu/sync,\nstatus, kitchen-status\n<size:10>[HTTP, X-Partner-Token]</size>
 outbox --> sim : POST /kitchen/events\n<size:10>[HTTP, X-Event-ID]</size>
@@ -66,6 +67,17 @@ api --> db : SQL, транзакции\n<size:10>[pgx/v5, пул соедине�
 outbox --> db : SELECT ... FOR UPDATE\nSKIP LOCKED
 reaper --> db : выборка зависших заказов,\nудаление протухших ключей
 migrate --> db : DDL\n<size:10>[golang-migrate]</size>
+
+note bottom of web
+  <b>Почему страницы рендерит сам сервис</b>
+  Веб-клиент вызывает те же CatalogService,
+  OrderService и PartnerService, что и JSON API.
+  Бизнес-правило существует в одном экземпляре,
+  а два транспорта лишь по-разному его показывают:
+  один — JSON, другой — HTML. Отдельный SPA
+  потребовал бы дублировать состояния и коды
+  ошибок на клиенте.
+end note
 
 note bottom of api
   <b>Почему монолит, а не набор сервисов</b>

@@ -1,0 +1,152 @@
+{{define "page:menu"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container">
+  <a href="/restaurants">&larr; Все заведения</a>
+
+  <h1>{{.Restaurant.Name}}</h1>
+  <p class="meta">
+    <span class="badge badge-{{restaurantStatusColor .Restaurant.Status}}">{{restaurantStatusLabel .Restaurant.Status}}</span>
+    &middot; минимальный заказ {{money .Restaurant.MinOrderKopecks}}
+    &middot; доставка {{money .Restaurant.DeliveryFeeKopecks}}
+    &middot; версия меню {{.Version}}
+  </p>
+
+  {{if not .AcceptsOrders}}
+  <div class="notice error">
+    Заведение сейчас не принимает заказы. Меню показано для ознакомления.
+  </div>
+  {{end}}
+
+  <form action="/orders" method="POST">
+    <input type="hidden" name="restaurant_id" value="{{.Restaurant.ID}}">
+    <input type="hidden" name="back_url" value="/restaurants/{{.Restaurant.Slug}}">
+    {{/*
+      Ключ идемпотентности выдаётся вместе с формой. Повторная отправка той же
+      формы — двойной клик или возврат кнопкой «назад» — не создаст второй
+      заказ, а откроет уже оформленный.
+    */}}
+    <input type="hidden" name="idempotency_key" value="{{.IdempotencyKey}}">
+
+    {{range .Categories}}
+    <section class="category">
+      <h3>{{.Name}}</h3>
+
+      {{range .Products}}
+      <div class="dish{{if not .Available}} unavailable{{end}}">
+        <div class="body">
+          <h4>{{.Name}}</h4>
+          {{if .Description}}<p class="meta">{{.Description}}</p>{{end}}
+          <p>
+            <span class="price">{{money .PriceKopecks}}</span>
+            {{if not .Available}}
+              <span class="badge badge-red">Нет в наличии</span>
+            {{else if hasStock .StockQty}}
+              <span class="meta">осталось {{.StockQty}} шт.</span>
+            {{end}}
+          </p>
+        </div>
+
+        {{if and .Available $.AcceptsOrders}}
+        {{/*
+          Имя поля содержит артикул, а не порядковый номер: форма отправляет
+          ровно то, что видел человек, и не требует синхронизации индексов
+          скриптом. Поэтому заказ оформляется и с выключенным JavaScript.
+        */}}
+        <input class="qty" type="number" min="0" max="100" value="0"
+               name="qty_{{.ProductKey}}"
+               data-price="{{.PriceKopecks}}"
+               data-name="{{.Name}}"
+               aria-label="Количество: {{.Name}}">
+        {{end}}
+      </div>
+      {{end}}
+    </section>
+    {{end}}
+
+    {{if .AcceptsOrders}}
+    <section class="panel">
+      <h3>Оформление</h3>
+      <div id="cart-summary" class="meta">Выберите блюда, чтобы увидеть сумму.</div>
+
+      <label for="delivery_address">Адрес доставки</label>
+      <input type="text" id="delivery_address" name="delivery_address"
+             placeholder="ул. Ленина, 10" required autocomplete="street-address">
+
+      <button type="submit">Оформить заказ</button>
+      <p class="meta">
+        Итоговую сумму считает сервер по ценам из меню — значения со страницы
+        носят справочный характер.
+      </p>
+    </section>
+    {{end}}
+  </form>
+</main>
+{{template "layout:footer" .}}
+
+<script>
+// Предпросмотр корзины. Цены берутся из data-атрибутов в копейках — текст со
+// страницы не парсится, поэтому вёрстка и подсчёт независимы. Сервер всё равно
+// считает сумму сам; это лишь подсказка пользователю.
+(function () {
+  var form = document.querySelector('form[action="/orders"]');
+  if (!form) return;
+
+  var summary = document.getElementById('cart-summary');
+
+  function formatKopecks(k) {
+    return (k / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽';
+  }
+
+  function refresh() {
+    var lines = [];
+    var total = 0;
+
+    form.querySelectorAll('input.qty').forEach(function (input) {
+      var qty = parseInt(input.value, 10) || 0;
+      if (qty <= 0) return;
+
+      var price = parseInt(input.dataset.price, 10) || 0;
+      total += price * qty;
+      lines.push({ name: input.dataset.name, qty: qty, sum: price * qty });
+    });
+
+    if (lines.length === 0) {
+      summary.textContent = 'Выберите блюда, чтобы увидеть сумму.';
+      return;
+    }
+
+    var html = lines.map(function (l) {
+      return '<div style="display:flex;justify-content:space-between">' +
+             '<span></span><span></span></div>';
+    }).join('');
+
+    summary.innerHTML = html;
+    var rows = summary.querySelectorAll('div');
+    lines.forEach(function (l, i) {
+      var spans = rows[i].querySelectorAll('span');
+      spans[0].textContent = l.name + ' × ' + l.qty;
+      spans[1].textContent = formatKopecks(l.sum);
+    });
+
+    var totalRow = document.createElement('div');
+    totalRow.style.cssText = 'display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--pico-muted-border-color);margin-top:.4rem;padding-top:.4rem';
+    var left = document.createElement('span');
+    left.textContent = 'Блюда';
+    var right = document.createElement('span');
+    right.textContent = formatKopecks(total);
+    totalRow.appendChild(left);
+    totalRow.appendChild(right);
+    summary.appendChild(totalRow);
+  }
+
+  form.addEventListener('input', refresh);
+  refresh();
+})();
+</script>
+</body>
+</html>
+{{end}}

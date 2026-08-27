@@ -16,6 +16,7 @@ import (
 	"avito-kitchen/internal/adapters/http"
 	"avito-kitchen/internal/adapters/postgres"
 	"avito-kitchen/internal/adapters/simclient"
+	"avito-kitchen/internal/adapters/web"
 	"avito-kitchen/internal/app"
 	"avito-kitchen/internal/config"
 	"avito-kitchen/internal/platform/httpserver"
@@ -86,8 +87,22 @@ func run() error {
 		http.NewHealthHandler(pool, version),
 	)
 
+	webHandler, err := web.New(web.Config{
+		Catalog:        catalogService,
+		Orders:         orderService,
+		Partner:        partnerService,
+		Idempotency:    idempotencyRepo,
+		IdempotencyTTL: cfg.Idempot.TTL,
+		SecureCookies:  cfg.Web.SecureCookies,
+		Logger:         log,
+	})
+	if err != nil {
+		return fmt.Errorf("сборка веб-слоя: %w", err)
+	}
+
 	router := http.NewRouter(http.RouterConfig{
 		Server:         server,
+		WebHandler:     webHandler,
 		PartnerAuth:    partnerService,
 		Idempotency:    idempotencyRepo,
 		IdempotencyTTL: cfg.Idempot.TTL,

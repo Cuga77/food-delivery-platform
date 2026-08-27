@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -315,8 +316,8 @@ func TestOrderService_Create_RollbackRestoresPartialDecrements(t *testing.T) {
 
 	var events int
 	require.NoError(t, testPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM outbox_events WHERE payload->>'restaurant_id' = $1`,
-		restaurant.ID).Scan(&events))
+		`SELECT COUNT(*) FROM outbox_events WHERE payload->>'restaurant_id' = $1::text`,
+		strconv.FormatInt(restaurant.ID, 10)).Scan(&events))
 	assert.Zero(t, events, "событие не отправлено")
 }
 
@@ -611,24 +612,24 @@ func TestIdempotencyRepo_ReserveCompleteReplay(t *testing.T) {
 	key := unique("idem")
 	expires := time.Now().Add(time.Hour)
 
-	_, claimed, err := env.idempotency.Reserve(ctx, key, "hash-1", expires)
+	_, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload-1"), expires)
 	require.NoError(t, err)
 	assert.True(t, claimed, "первый запрос захватывает ключ")
 
-	existing, claimed, err := env.idempotency.Reserve(ctx, key, "hash-1", expires)
+	existing, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload-1"), expires)
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.True(t, existing.InProgress(), "операция ещё выполняется")
 
 	require.NoError(t, env.idempotency.Complete(ctx, key, 201, []byte(`{"ok":true}`)))
 
-	replay, claimed, err := env.idempotency.Reserve(ctx, key, "hash-1", expires)
+	replay, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload-1"), expires)
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.False(t, replay.InProgress())
 	assert.Equal(t, 201, replay.ResponseStatus)
 	assert.JSONEq(t, `{"ok":true}`, string(replay.ResponseBody))
-	assert.Equal(t, "hash-1", replay.RequestHash)
+	assert.Equal(t, testHash("payload-1"), replay.RequestHash)
 }
 
 // Захватить ключ должен ровно один из параллельных запросов.
@@ -653,7 +654,7 @@ func TestIdempotencyRepo_Reserve_ConcurrentClaimIsExclusive(t *testing.T) {
 			defer wg.Done()
 			<-start
 
-			_, claimed, err := env.idempotency.Reserve(ctx, key, "hash", expires)
+			_, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload"), expires)
 			require.NoError(t, err)
 
 			mu.Lock()
@@ -678,13 +679,13 @@ func TestIdempotencyRepo_ReleaseAllowsRetry(t *testing.T) {
 	key := unique("idem-release")
 	expires := time.Now().Add(time.Hour)
 
-	_, claimed, err := env.idempotency.Reserve(ctx, key, "hash", expires)
+	_, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload"), expires)
 	require.NoError(t, err)
 	require.True(t, claimed)
 
 	require.NoError(t, env.idempotency.Release(ctx, key))
 
-	_, claimed, err = env.idempotency.Reserve(ctx, key, "hash", expires)
+	_, claimed, err = env.idempotency.Reserve(ctx, key, testHash("payload"), expires)
 	require.NoError(t, err)
 	assert.True(t, claimed, "после освобождения ключ снова доступен")
 
@@ -692,7 +693,7 @@ func TestIdempotencyRepo_ReleaseAllowsRetry(t *testing.T) {
 	require.NoError(t, env.idempotency.Complete(ctx, key, 201, []byte(`{}`)))
 	require.NoError(t, env.idempotency.Release(ctx, key))
 
-	record, claimed, err := env.idempotency.Reserve(ctx, key, "hash", expires)
+	record, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload"), expires)
 	require.NoError(t, err)
 	assert.False(t, claimed)
 	assert.Equal(t, 201, record.ResponseStatus)
@@ -703,12 +704,12 @@ func TestIdempotencyRepo_ExpiredKeyIsReclaimable(t *testing.T) {
 	env := newTestEnv(t)
 	key := unique("idem-expired")
 
-	_, claimed, err := env.idempotency.Reserve(ctx, key, "hash-1", time.Now().Add(-time.Minute))
+	_, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload-1"), time.Now().Add(-time.Minute))
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.NoError(t, env.idempotency.Complete(ctx, key, 201, []byte(`{}`)))
 
-	_, claimed, err = env.idempotency.Reserve(ctx, key, "hash-2", time.Now().Add(time.Hour))
+	_, claimed, err = env.idempotency.Reserve(ctx, key, testHash("payload-2"), time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.True(t, claimed, "протухший ключ можно захватить заново")
 
@@ -1058,7 +1059,7 @@ func TestReaperWorker_CancelsStaleOrdersAndPurgesKeys(t *testing.T) {
 
 	// И заодно протухший ключ идемпотентности.
 	expiredKey := unique("idem-stale")
-	_, claimed, err := env.idempotency.Reserve(ctx, expiredKey, "hash", time.Now().Add(-time.Hour))
+	_, claimed, err := env.idempotency.Reserve(ctx, expiredKey, testHash("payload"), time.Now().Add(-time.Hour))
 	require.NoError(t, err)
 	require.True(t, claimed)
 

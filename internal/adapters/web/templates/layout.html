@@ -1,0 +1,99 @@
+{{/*
+  Общие части страниц: head, шапка и подвал.
+
+  Стили и htmx подключаются с CDN — это упрощение демо-окружения, отмеченное
+  в README. Страницы намеренно остаются рабочими без JavaScript: htmx лишь
+  избавляет от перезагрузок, а все действия выполняются обычными формами.
+*/}}
+
+{{define "layout:head"}}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — Авито.Кухня</title>
+<script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+  :root { --brand: #00aaff; }
+
+  header.site { border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: 2rem; }
+  header.site .container { display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 1rem; }
+  header.site a { text-decoration: none; }
+  header.site .brand { font-weight: 700; font-size: 1.15rem; color: var(--brand); }
+  header.site .spacer { flex: 1; }
+
+  .badge {
+    display: inline-block; padding: 0.15em 0.6em; border-radius: 999px;
+    font-size: 0.78em; font-weight: 600; color: #fff; vertical-align: middle;
+  }
+  .badge-blue { background: #3b82f6; }
+  .badge-orange { background: #f97316; }
+  .badge-green { background: #16a34a; }
+  .badge-red { background: #dc2626; }
+  .badge-gray { background: #6b7280; }
+
+  .meta { color: var(--pico-muted-color); font-size: 0.9em; }
+
+  .card-link {
+    display: block; border: 1px solid var(--pico-muted-border-color);
+    border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+    text-decoration: none; color: inherit; transition: border-color .15s, transform .15s;
+  }
+  .card-link:hover { border-color: var(--brand); transform: translateY(-1px); }
+  .card-link h3 { margin: 0 0 .35rem 0; }
+
+  .category { margin-bottom: 2rem; }
+  .category > h3 { border-bottom: 2px solid var(--brand); padding-bottom: .3rem; }
+
+  .dish { display: flex; gap: 1rem; align-items: flex-start;
+          padding: .8rem 0; border-bottom: 1px solid var(--pico-muted-border-color); }
+  .dish:last-child { border-bottom: none; }
+  .dish .body { flex: 1; }
+  .dish .body h4 { margin: 0 0 .2rem 0; }
+  .dish .body p { margin: 0; }
+  .dish .price { font-weight: 600; white-space: nowrap; }
+  .dish .qty { width: 5.5rem; margin: 0; }
+  .dish.unavailable { opacity: .55; }
+
+  .panel { border: 1px solid var(--pico-muted-border-color); border-radius: 10px; padding: 1.25rem; }
+
+  .timeline { list-style: none; padding: 0; margin: 0; }
+  .timeline li { border-left: 3px solid var(--pico-muted-border-color);
+                 padding: .45rem 0 .45rem 1rem; margin-left: .4rem; }
+  .timeline li:last-child { border-left-color: var(--brand); }
+  .timeline .time { font-size: .82em; color: var(--pico-muted-color); }
+
+  .toolbar { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1.25rem; }
+  .toolbar form { margin: 0; display: inline; }
+  .toolbar button { margin: 0; }
+
+  .empty { text-align: center; padding: 2.5rem; color: var(--pico-muted-color); }
+
+  .row-actions form { display: inline; margin: 0; }
+  .row-actions button { margin: 0 .2rem 0 0; font-size: .8em; padding: .25em .7em; }
+
+  .notice { border-left: 4px solid var(--brand); padding: .6rem 1rem; margin-bottom: 1rem;
+            background: var(--pico-card-sectioning-background-color); }
+  .notice.error { border-left-color: #dc2626; }
+</style>
+{{end}}
+
+{{define "layout:header"}}
+<header class="site">
+  <div class="container">
+    <a href="/restaurants" class="brand">Авито.Кухня</a>
+    <a href="/restaurants">Заведения</a>
+    <span class="spacer"></span>
+    <a href="/partner">Кабинет заведения</a>
+  </div>
+</header>
+{{end}}
+
+{{define "layout:footer"}}
+<footer class="container">
+  <hr>
+  <p class="meta">
+    MVP-демонстрация. Аутентификация пользователей вне объёма задания;
+    кабинет заведения защищён партнёрским токеном.
+  </p>
+</footer>
+{{end}}

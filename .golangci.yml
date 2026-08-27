@@ -82,6 +82,13 @@ linters:
       - path: internal/adapters/postgres/
         linters:
           - dupl
+      # internal/app/apptest — фикстуры для тестов: те же послабления, что и
+      # для файлов _test.go, хотя формально это обычный пакет.
+      - path: internal/app/apptest/
+        linters:
+          - gocritic
+          - gosec
+          - dupl
 
 formatters:
   enable:

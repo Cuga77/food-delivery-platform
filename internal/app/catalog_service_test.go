@@ -47,13 +47,13 @@ func TestCatalogService_ListRestaurants_Pagination(t *testing.T) {
 	env := newTestEnv()
 	ctx := context.Background()
 
-	first, err := env.catalog.ListRestaurants(ctx, app.ListRestaurantsQuery{Limit: 1})
+	first, err := env.Catalog.ListRestaurants(ctx, app.ListRestaurantsQuery{Limit: 1})
 	require.NoError(t, err)
 	require.Len(t, first.Items, 1)
 	assert.Equal(t, "pizza-avito", first.Items[0].Slug)
 	require.NotEmpty(t, first.NextCursor, "есть ещё данные — курсор обязателен")
 
-	second, err := env.catalog.ListRestaurants(ctx, app.ListRestaurantsQuery{
+	second, err := env.Catalog.ListRestaurants(ctx, app.ListRestaurantsQuery{
 		Limit:  1,
 		Cursor: first.NextCursor,
 	})
@@ -68,7 +68,7 @@ func TestCatalogService_ListRestaurants_DefaultLimit(t *testing.T) {
 
 	env := newTestEnv()
 
-	page, err := env.catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{})
+	page, err := env.Catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{})
 	require.NoError(t, err)
 	assert.Len(t, page.Items, 2)
 	assert.Empty(t, page.NextCursor)
@@ -80,7 +80,7 @@ func TestCatalogService_ListRestaurants_StatusFilter(t *testing.T) {
 	env := newTestEnv()
 	online := domain.RestaurantOnline
 
-	page, err := env.catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{
+	page, err := env.Catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{
 		Status: &online,
 	})
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestCatalogService_ListRestaurants_RejectsUnknownStatus(t *testing.T) {
 	env := newTestEnv()
 	bogus := domain.RestaurantStatus("burning")
 
-	_, err := env.catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{
+	_, err := env.Catalog.ListRestaurants(context.Background(), app.ListRestaurantsQuery{
 		Status: &bogus,
 	})
 	require.Error(t, err)
@@ -106,7 +106,7 @@ func TestCatalogService_GetMenuBySlug(t *testing.T) {
 
 	env := newTestEnv()
 
-	menu, err := env.catalog.GetMenuBySlug(context.Background(), "pizza-avito")
+	menu, err := env.Catalog.GetMenuBySlug(context.Background(), "pizza-avito")
 	require.NoError(t, err)
 
 	assert.Equal(t, "Пиццерия Авито", menu.Restaurant.Name)
@@ -132,7 +132,7 @@ func TestCatalogService_GetMenuBySlug_NotFound(t *testing.T) {
 
 	env := newTestEnv()
 
-	_, err := env.catalog.GetMenuBySlug(context.Background(), "nonexistent")
+	_, err := env.Catalog.GetMenuBySlug(context.Background(), "nonexistent")
 	require.Error(t, err)
 	assert.Equal(t, domain.CodeRestaurantNotFound, domain.CodeOf(err))
 }
