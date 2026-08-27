@@ -3,6 +3,7 @@ SHELL := /bin/bash
 
 # Версии инструментов, которые не пинуются через `tool` в go.mod.
 GOLANGCI_LINT_VERSION := v2.13.1
+K6_VERSION            := latest
 PLANTUML_VERSION      := 1.2025.4
 
 COMPOSE     := docker compose
@@ -149,6 +150,35 @@ cover:
 .PHONY: smoke
 smoke:
 	./scripts/smoke.sh
+
+# ---------------------------------------------------------------------------
+# Нагрузочные сценарии (k6)
+# ---------------------------------------------------------------------------
+
+# k6 — программа на Go, поэтому ставится тем же go install и не требует
+# отдельного пакетного менеджера.
+$(LOCAL_BIN)/k6:
+	@mkdir -p $(LOCAL_BIN)
+	GOBIN=$(LOCAL_BIN) go install go.k6.io/k6@$(K6_VERSION)
+
+## load-browse: нагрузка на витрину (чтение)
+.PHONY: load-browse
+load-browse: $(LOCAL_BIN)/k6
+	$(LOCAL_BIN)/k6 run load/browse.js
+
+## load-order: нагрузка на оформление заказов (запись)
+.PHONY: load-order
+load-order: $(LOCAL_BIN)/k6
+	$(LOCAL_BIN)/k6 run load/order.js
+
+## load-contention: гонка за последней порцией — проверка на перепродажу
+.PHONY: load-contention
+load-contention: $(LOCAL_BIN)/k6
+	$(LOCAL_BIN)/k6 run load/contention.js
+
+## load: все нагрузочные сценарии подряд (нужен поднятый стек)
+.PHONY: load
+load: load-browse load-order load-contention
 
 # ---------------------------------------------------------------------------
 # Диаграммы
