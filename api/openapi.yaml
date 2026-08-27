@@ -461,6 +461,8 @@ components:
       enum:
         - BAD_REQUEST
         - VALIDATION_ERROR
+        - ROUTE_NOT_FOUND
+        - METHOD_NOT_ALLOWED
         - UNAUTHORIZED
         - FORBIDDEN
         - RESTAURANT_NOT_FOUND

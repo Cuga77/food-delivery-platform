@@ -41,10 +41,12 @@ type Problem struct {
 // Маппинг живёт в транспортном слое: домен не должен знать про HTTP, а вот
 // транспорт обязан отвечать на «недостаточно остатка» именно 409, а не 500.
 var statusByCode = map[domain.ErrorCode]int{
-	domain.CodeBadRequest:      http.StatusBadRequest,
-	domain.CodeValidationError: http.StatusUnprocessableEntity,
-	domain.CodeUnauthorized:    http.StatusUnauthorized,
-	domain.CodeForbidden:       http.StatusForbidden,
+	domain.CodeBadRequest:       http.StatusBadRequest,
+	domain.CodeValidationError:  http.StatusUnprocessableEntity,
+	domain.CodeRouteNotFound:    http.StatusNotFound,
+	domain.CodeMethodNotAllowed: http.StatusMethodNotAllowed,
+	domain.CodeUnauthorized:     http.StatusUnauthorized,
+	domain.CodeForbidden:        http.StatusForbidden,
 
 	domain.CodeRestaurantNotFound: http.StatusNotFound,
 	domain.CodeMenuNotFound:       http.StatusNotFound,
