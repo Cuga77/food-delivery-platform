@@ -391,3 +391,24 @@ func TestOrderService_ChangeStatus_SystemCancelsStaleOrder(t *testing.T) {
 	assert.Equal(t, domain.ActorSystem, cancelled.Timeline[1].Actor)
 	assert.Equal(t, int32(10), *env.StockOf(11))
 }
+
+// Проверки, не требующие блокировок, обязаны идти раньше тех, что их берут:
+// обречённый заказ не должен занимать очередь на популярной позиции.
+//
+// Наблюдаемое следствие — какая ошибка выигрывает, когда нарушены оба условия
+// сразу: заказ дешевле минимальной суммы И остатка не хватает.
+func TestOrderService_Create_MinOrderCheckedBeforeStock(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv()
+
+	// Кола: 120 ₽ при минимуме 500 ₽, и в наличии всего 2 штуки.
+	_, err := env.Orders.Create(context.Background(), draft(
+		domain.DraftItem{ProductKey: "drink_cola", Qty: 3},
+	))
+	require.Error(t, err)
+
+	assert.Equal(t, domain.CodeMinOrderNotMet, domain.CodeOf(err),
+		"сумма проверяется до списания, поэтому блокировка строки не берётся вовсе")
+	assert.Equal(t, int32(2), *env.StockOf(14), "остаток не тронут")
+}

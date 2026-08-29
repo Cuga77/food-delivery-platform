@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -149,9 +150,21 @@ func (r *OutboxRepo) MarkDead(ctx context.Context, id int64, reason string) erro
 // разбора, а не мегабайтный дамп чужого ответа.
 const maxReasonLength = 1000
 
+// truncateReason обрезает причину по границе символа.
+//
+// Срез по байтам разрубил бы многобайтную руну пополам: колонка TEXT такое
+// примет, но в last_error осталась бы битая последовательность — а это
+// единственный след инцидента, по которому его потом разбирают. Сообщения
+// сервиса на русском, поэтому почти каждый обрыв пришёлся бы на середину.
 func truncateReason(reason string) string {
 	if len(reason) <= maxReasonLength {
 		return reason
 	}
-	return reason[:maxReasonLength] + "…"
+
+	cut := maxReasonLength
+	for cut > 0 && !utf8.RuneStart(reason[cut]) {
+		cut--
+	}
+
+	return reason[:cut] + "…"
 }

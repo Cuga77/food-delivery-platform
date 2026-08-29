@@ -123,6 +123,10 @@ func validateSyncProducts(products []domain.Product) error {
 		case p.PriceKopecks < 0:
 			return domain.Errorf(domain.CodeValidationError,
 				"отрицательная цена у позиции «%s»", p.ProductKey)
+		case p.PriceKopecks > domain.MaxPriceKopecks:
+			return domain.Errorf(domain.CodeValidationError,
+				"цена позиции «%s» превышает допустимую (%s)",
+				p.ProductKey, domain.FormatKopecks(domain.MaxPriceKopecks))
 		case p.StockQty != nil && *p.StockQty < 0:
 			return domain.Errorf(domain.CodeValidationError,
 				"отрицательный остаток у позиции «%s»", p.ProductKey)

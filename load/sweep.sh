@@ -34,7 +34,19 @@ trap 'rm -rf "$OUT"' EXIT
 # именно хвост показывает, во что упирается система, а медиана остаётся ровной.
 TREND_STATS="med,p(95),p(99),max"
 
+# Провалы прогонов копятся здесь: молча напечатанная таблица с прочерками —
+# худшее, что может сделать инструмент, чья единственная задача — отличать
+# провал от победы.
+FAILURES=0
+
+# k6 возвращает 107, когда не сошлись пороги. Для развёртки это ожидаемый и
+# осмысленный исход (мы намеренно доводим систему до предела), а вот любой
+# другой ненулевой код — это упавший setup, недоступный сервис или ошибка в
+# сценарии, и такой прогон нельзя выдавать за результат.
+readonly K6_THRESHOLD_EXIT=107
+
 # run <файл сценария> <имя прогона> <доп. -e аргументы...>
+# Возвращает код выхода k6; заполняет OUT/<label>.status.
 run() {
   local script=$1 label=$2
   shift 2
@@ -42,10 +54,46 @@ run() {
   # --summary-mode=disabled здесь нельзя: он отключает и запись
   # --summary-export, а именно из неё собирается таблица. Сам вывод глушится
   # перенаправлением в лог прогона.
+  local code=0
   "$K6" run --quiet \
     --summary-trend-stats="$TREND_STATS" \
     --summary-export="$OUT/$label.json" \
-    "$@" "$script" >"$OUT/$label.log" 2>&1 || true
+    "$@" "$script" >"$OUT/$label.log" 2>&1 || code=$?
+
+  echo "$code" >"$OUT/$label.status"
+
+  if [[ "$code" -ne 0 && "$code" -ne "$K6_THRESHOLD_EXIT" ]]; then
+    FAILURES=$((FAILURES + 1))
+    echo >&2
+    echo "ПРОГОН «$label» НЕ СОСТОЯЛСЯ (код $code). Последние строки лога:" >&2
+    tail -n 15 "$OUT/$label.log" >&2
+    echo >&2
+  fi
+
+  return 0
+}
+
+# mark отмечает исход прогона в таблице: пусто — всё сошлось, «пороги» —
+# ожидаемое для развёртки нарушение порога, «СБОЙ» — прогон не состоялся.
+mark() {
+  local code
+  code=$(cat "$OUT/$1.status" 2>/dev/null || echo 1)
+
+  case "$code" in
+    0) echo "" ;;
+    "$K6_THRESHOLD_EXIT") echo "пороги" ;;
+    *) echo "СБОЙ" ;;
+  esac
+}
+
+# finish подводит итог: развёртка обязана возвращать ненулевой код, если хоть
+# один прогон не состоялся.
+finish() {
+  if [[ "$FAILURES" -gt 0 ]]; then
+    echo
+    echo "не состоялось прогонов: $FAILURES — таблица выше неполная" >&2
+    exit 1
+  fi
 }
 
 # stat <прогон> <метрика> <поле>
@@ -76,27 +124,29 @@ sweep_throughput() {
   echo "Развёртка по интенсивности — путь записи без конкуренции за остаток"
   echo "Постоянная интенсивность, 20 секунд на шаг, остаток неограничен"
   echo
-  printf '| %-10s | %-12s | %-9s | %-9s | %-9s | %-9s | %-10s |\n' \
-    'цель, rps' 'факт, зак/с' 'med' 'p95' 'p99' 'max' 'недодано'
-  printf '|%s|%s|%s|%s|%s|%s|%s|\n' \
-    '------------' '--------------' '-----------' '-----------' '-----------' '-----------' '------------'
+  printf '| %-10s | %-12s | %-9s | %-9s | %-9s | %-9s | %-10s | %-7s |\n' \
+    'цель, rps' 'факт, зак/с' 'med' 'p95' 'p99' 'max' 'недодано' 'исход'
+  printf '|%s|%s|%s|%s|%s|%s|%s|%s|\n' \
+    '------------' '--------------' '-----------' '-----------' '-----------' '-----------' '------------' '---------'
 
   for rate in "${rates[@]}"; do
     run load/order.js "rps-$rate" -e "RATE=$rate" -e DURATION=20s -e PROFILE=constant
 
-    printf '| %-10s | %-12s | %-9s | %-9s | %-9s | %-9s | %-10s |\n' \
+    printf '| %-10s | %-12s | %-9s | %-9s | %-9s | %-9s | %-10s | %-7s |\n' \
       "$rate" \
       "$(jq -r '((.metrics.orders_created.rate // 0) * 100 | round / 100)' "$OUT/rps-$rate.json")" \
       "$(stat "rps-$rate" order_create_duration med)" \
       "$(stat "rps-$rate" order_create_duration 'p(95)')" \
       "$(stat "rps-$rate" order_create_duration 'p(99)')" \
       "$(stat "rps-$rate" order_create_duration max)" \
-      "$(jq -r '(.metrics.dropped_iterations.count // 0) | floor' "$OUT/rps-$rate.json")"
+      "$(jq -r '(.metrics.dropped_iterations.count // 0) | floor' "$OUT/rps-$rate.json")" \
+      "$(mark "rps-$rate")"
   done
 
   echo
   echo "Насыщение — там, где «факт» отстаёт от «цели» и появляется «недодано»:"
   echo "k6 не успевает выдавать запросы в заданном темпе, потому что сервис не отвечает."
+  finish
 }
 
 # --- Режим 2: цена конкуренции ----------------------------------------------
@@ -111,28 +161,30 @@ sweep_contention() {
 
   echo "Развёртка по конкуренции — $stock порций на ОДНОЙ строке, $iterations попыток"
   echo
-  printf '| %-4s | %-8s | %-9s | %-9s | %-9s | %-9s | %-9s |\n' \
-    'VU' 'продано' 'усп. med' 'усп. p95' 'усп. p99' 'отказ p95' 'отказ p99'
-  printf '|%s|%s|%s|%s|%s|%s|%s|\n' \
-    '------' '----------' '-----------' '-----------' '-----------' '-----------' '-----------'
+  printf '| %-4s | %-8s | %-9s | %-9s | %-9s | %-9s | %-9s | %-7s |\n' \
+    'VU' 'продано' 'усп. med' 'усп. p95' 'усп. p99' 'отказ p95' 'отказ p99' 'исход'
+  printf '|%s|%s|%s|%s|%s|%s|%s|%s|\n' \
+    '------' '----------' '-----------' '-----------' '-----------' '-----------' '-----------' '---------'
 
   for vu in "${vus[@]}"; do
     run load/contention.js "vu-$vu" \
       -e "STOCK=$stock" -e "ITERATIONS=$iterations" -e "VUS=$vu" -e SPREAD=1
 
-    printf '| %-4s | %-8s | %-9s | %-9s | %-9s | %-9s | %-9s |\n' \
+    printf '| %-4s | %-8s | %-9s | %-9s | %-9s | %-9s | %-9s | %-7s |\n' \
       "$vu" \
       "$(count "vu-$vu" orders_created)" \
       "$(stat "vu-$vu" order_accepted_duration med)" \
       "$(stat "vu-$vu" order_accepted_duration 'p(95)')" \
       "$(stat "vu-$vu" order_accepted_duration 'p(99)')" \
       "$(stat "vu-$vu" order_rejected_duration 'p(95)')" \
-      "$(stat "vu-$vu" order_rejected_duration 'p(99)')"
+      "$(stat "vu-$vu" order_rejected_duration 'p(99)')" \
+      "$(mark "vu-$vu")"
   done
 
   echo
   echo "Столбец «продано» обязан всюду равняться $stock — иначе нарушен инвариант."
   echo "Рост «усп. p99» при неизменном «отказ p99» означает очередь на строчной блокировке."
+  finish
 }
 
 # --- Режим 3: изоляция причины ----------------------------------------------
@@ -149,27 +201,32 @@ sweep_spread() {
   echo "Развёртка по разносу — $stock порций, $vus VU, $iterations попыток"
   echo "Меняется только число строк, между которыми поделён тот же остаток"
   echo
-  printf '| %-7s | %-10s | %-8s | %-9s | %-9s | %-9s |\n' \
-    'строк' 'на строку' 'продано' 'усп. med' 'усп. p95' 'усп. p99'
-  printf '|%s|%s|%s|%s|%s|%s|\n' \
-    '---------' '------------' '----------' '-----------' '-----------' '-----------'
+  printf '| %-7s | %-10s | %-8s | %-9s | %-9s | %-9s | %-7s |\n' \
+    'строк' 'на строку' 'продано' 'усп. med' 'усп. p95' 'усп. p99' 'исход'
+  printf '|%s|%s|%s|%s|%s|%s|%s|\n' \
+    '---------' '------------' '----------' '-----------' '-----------' '-----------' '---------'
 
   for spread in "${spreads[@]}"; do
     run load/contention.js "spread-$spread" \
       -e "STOCK=$stock" -e "ITERATIONS=$iterations" -e "VUS=$vus" -e "SPREAD=$spread"
 
-    printf '| %-7s | %-10s | %-8s | %-9s | %-9s | %-9s |\n' \
+    printf '| %-7s | %-10s | %-8s | %-9s | %-9s | %-9s | %-7s |\n' \
       "$spread" \
       "$((stock / spread))" \
       "$(count "spread-$spread" orders_created)" \
       "$(stat "spread-$spread" order_accepted_duration med)" \
       "$(stat "spread-$spread" order_accepted_duration 'p(95)')" \
-      "$(stat "spread-$spread" order_accepted_duration 'p(99)')"
+      "$(stat "spread-$spread" order_accepted_duration 'p(99)')" \
+      "$(mark "spread-$spread")"
   done
 
   echo
   echo "Падение задержки с ростом числа строк = узкое место в строчной блокировке."
   echo "Если задержка не меняется, упирается что-то общее: пул, CPU, диск."
+  echo
+  echo "При разносе «продано» — наблюдение одного прогона, а не утверждение:"
+  echo "позиция выбирается случайно, и часть строк может остаться нераспроданной."
+  finish
 }
 
 case "$MODE" in
