@@ -15,7 +15,7 @@ import { check } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import {
   createOrder,
-  expectBusinessStatuses,
+  expectWriteStatuses,
   fetchOrder,
   findRestaurant,
   publishMenu,
@@ -23,7 +23,7 @@ import {
   waitForService,
 } from './lib.js';
 
-expectBusinessStatuses();
+expectWriteStatuses();
 
 const RATE = Number(__ENV.RATE || 30);
 const DURATION = __ENV.DURATION || '30s';

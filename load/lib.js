@@ -4,7 +4,7 @@
 // прогон не зависел от доступа в интернет и от чужого CDN.
 
 import http from 'k6/http';
-import { check, fail } from 'k6';
+import { check, fail, sleep } from 'k6';
 
 // --- Конфигурация -----------------------------------------------------------
 
@@ -15,13 +15,21 @@ export const RESTAURANT_SLUG = __ENV.RESTAURANT_SLUG || 'pizza-avito';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const PARTNER_HEADERS = { ...JSON_HEADERS, 'X-Partner-Token': PARTNER_TOKEN };
 
-// Статусы, которые считаются штатным ответом сервиса, а не сбоем.
+// Ожидаемые статусы задаются каждым сценарием отдельно.
 //
-// 409 и 422 — это корректные бизнес-ответы («кончился остаток», «не набрана
-// минимальная сумма»), и под нагрузкой их доля как раз и интересна. Без этой
-// настройки k6 записал бы их в http_req_failed и метрика ошибок перестала бы
-// отличать отказ сервиса от штатного отказа в заказе.
-export function expectBusinessStatuses() {
+// 409 и 422 — корректные бизнес-ответы («кончился остаток», «не набрана
+// минимальная сумма»), и в сценариях записи их доля как раз и интересна: без
+// этой настройки k6 записал бы их в http_req_failed, и метрика ошибок
+// перестала бы отличать сбой сервиса от штатного отказа в заказе.
+//
+// Но для чтения такое послабление вредно: витрина не должна отвечать ни 409,
+// ни 422 никогда, и если ответила — это настоящая ошибка, которую нельзя
+// прятать. Поэтому широкий список включается только там, где он осмыслен.
+export function expectReadStatuses() {
+  http.setResponseCallback(http.expectedStatuses(200, 204));
+}
+
+export function expectWriteStatuses() {
   http.setResponseCallback(http.expectedStatuses(200, 201, 204, 409, 422));
 }
 
@@ -49,10 +57,19 @@ export function waitForService(timeoutSeconds = 60) {
   const deadline = Date.now() + timeoutSeconds * 1000;
 
   while (Date.now() < deadline) {
-    const response = http.get(`${BASE_URL}/readyz`, { tags: { name: 'readyz' } });
+    // Проба идёт своим callback-ом: пока сервис не готов, /readyz отвечает 503,
+    // и без этого прогон записал бы ожидание старта себе в http_req_failed.
+    const response = http.get(`${BASE_URL}/readyz`, {
+      tags: { name: 'readyz' },
+      responseCallback: http.expectedStatuses(200, 503),
+    });
     if (response.status === 200) {
       return;
     }
+
+    // Пауза обязательна: без неё цикл ожидания сам создаёт нагрузку на
+    // поднимающийся сервис и мешает ему подняться.
+    sleep(0.5);
   }
 
   fail(`сервис ${BASE_URL} не поднялся за ${timeoutSeconds}s`);

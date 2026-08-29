@@ -115,6 +115,10 @@ func (d OrderDraft) Validate() error {
 			return Errorf(CodeValidationError,
 				"количество для «%s» должно быть больше нуля", item.ProductKey)
 		}
+		if item.Qty > MaxItemQty {
+			return Errorf(CodeValidationError,
+				"количество для «%s» не может превышать %d", item.ProductKey, MaxItemQty)
+		}
 		if _, dup := seen[item.ProductKey]; dup {
 			return Errorf(CodeValidationError,
 				"позиция «%s» указана в корзине дважды — объедините количества",

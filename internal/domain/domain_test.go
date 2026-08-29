@@ -209,3 +209,53 @@ func TestActor_Valid(t *testing.T) {
 	assert.True(t, domain.ActorSystem.Valid())
 	assert.False(t, domain.Actor("courier").Valid())
 }
+
+// Границы денег и количества существуют, чтобы произведение заведомо не
+// переполнило int64. Без них заведение могло бы выставить цену в 9·10¹⁸, и
+// заказ из двух позиций дал бы отрицательную сумму.
+func TestOrderDraft_RejectsHugeQuantity(t *testing.T) {
+	t.Parallel()
+
+	draft := domain.OrderDraft{
+		UserExternalID:  "usr_1",
+		RestaurantID:    1,
+		DeliveryAddress: "ул. Ленина, 10",
+		Items:           []domain.DraftItem{{ProductKey: "pizza", Qty: domain.MaxItemQty + 1}},
+	}
+
+	err := draft.Validate()
+
+	require.Error(t, err)
+	assert.Equal(t, domain.CodeValidationError, domain.CodeOf(err))
+	assert.Contains(t, err.Error(), "не может превышать")
+}
+
+func TestOrderDraft_AcceptsBoundaryQuantity(t *testing.T) {
+	t.Parallel()
+
+	draft := domain.OrderDraft{
+		UserExternalID:  "usr_1",
+		RestaurantID:    1,
+		DeliveryAddress: "ул. Ленина, 10",
+		Items:           []domain.DraftItem{{ProductKey: "pizza", Qty: domain.MaxItemQty}},
+	}
+
+	assert.NoError(t, draft.Validate())
+}
+
+// При заявленных границах произведение и сумма по сотне позиций остаются
+// далеко от потолка int64 — это и есть обоснование, почему LineTotal не
+// проверяет переполнение сам.
+func TestLineTotal_CannotOverflowWithinBounds(t *testing.T) {
+	t.Parallel()
+
+	maxLine := domain.LineTotal(domain.MaxPriceKopecks, domain.MaxItemQty)
+
+	assert.Positive(t, maxLine, "произведение границ не переполняется")
+	assert.Equal(t, int64(100_000_000)*1_000, maxLine)
+
+	// Сотня таких позиций — предел корзины по контракту.
+	subtotal := maxLine * 100
+	assert.Positive(t, subtotal)
+	assert.Less(t, subtotal, int64(1)<<62, "запас до потолка int64 не меньше двух порядков")
+}

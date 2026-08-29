@@ -1,9 +1,14 @@
 // Сценарий «витрина»: чтение каталога и меню.
 //
-// Что проверяем: держит ли read-path заданную интенсивность и не растёт ли
-// задержка при обходе каталога курсором. Keyset-пагинация должна давать
-// одинаковое время на первой и на последней странице — в отличие от OFFSET,
-// который дорожает с глубиной.
+// Что проверяем: держит ли read-path заданную интенсивность и остаётся ли
+// задержка ровной под нагрузкой.
+//
+// Чего сценарий НЕ проверяет: что keyset-пагинация не дорожает с глубиной.
+// В демо-каталоге всего пара заведений, а создать их сотнями через публичное
+// API нельзя — заведение заводит администратор площадки. Независимость
+// стоимости страницы от её номера проверяется там, где это возможно: обходом
+// всего каталога в интеграционном тесте TestRestaurantRepo_KeysetPagination и
+// разбором плана запроса в TestOrderRepo_ListByRestaurant_UsesIndex.
 //
 //   k6 run load/browse.js
 //   k6 run -e RATE=200 -e DURATION=1m load/browse.js
@@ -14,13 +19,13 @@ import {
   RESTAURANT_SLUG,
   browseCatalog,
   browseMenu,
-  expectBusinessStatuses,
+  expectReadStatuses,
   publishMenu,
   setKitchenStatus,
   waitForService,
 } from './lib.js';
 
-expectBusinessStatuses();
+expectReadStatuses();
 
 const RATE = Number(__ENV.RATE || 100);
 const DURATION = __ENV.DURATION || '30s';

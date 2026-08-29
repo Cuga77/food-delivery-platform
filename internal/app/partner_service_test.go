@@ -178,3 +178,20 @@ func TestPartnerService_ListOrders_RejectsUnknownStatus(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, domain.CodeBadRequest, domain.CodeOf(err))
 }
+
+// Цена сверх допустимой отклоняется на валидации, а не превращается в
+// переполнение при расчёте суммы заказа.
+func TestPartnerService_SyncMenu_RejectsHugePrice(t *testing.T) {
+	t.Parallel()
+
+	env := newTestEnv()
+
+	_, err := env.Partners.SyncMenu(context.Background(), 1, []domain.Product{
+		{ProductKey: "p1", Category: "Пицца", Name: "Золотая пицца",
+			PriceKopecks: domain.MaxPriceKopecks + 1, Available: true},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, domain.CodeValidationError, domain.CodeOf(err))
+	assert.Contains(t, err.Error(), "превышает допустимую")
+}
