@@ -160,11 +160,54 @@ func (c Config) validate() []error {
 			"OUTBOX_LEASE (%s) должен быть больше OUTBOX_HTTP_TIMEOUT (%s)",
 			c.Outbox.Lease, c.Outbox.HTTPTimeout))
 	}
-	if c.Reaper.OrderAcceptTimeout <= 0 {
-		errs = append(errs, errors.New("ORDER_ACCEPT_TIMEOUT должен быть положительным"))
+	if c.Reaper.BatchSize < 1 {
+		errs = append(errs, errors.New("REAPER_BATCH_SIZE должен быть не меньше 1"))
 	}
-	if c.Idempot.TTL <= 0 {
-		errs = append(errs, errors.New("IDEMPOTENCY_TTL должен быть положительным"))
+
+	// Каждая длительность обязана быть положительной, и это не формальность:
+	// time.NewTicker паникует на неположительном интервале, а таймаут в ноль
+	// означает мгновенную отмену любого запроса. Раньше такие значения
+	// проходили проверку, сервис поднимался, подключался к БД, открывал порт —
+	// и падал уже в горутине воркера.
+	positive := []struct {
+		name  string
+		value time.Duration
+	}{
+		{"HTTP_READ_TIMEOUT", c.HTTP.ReadTimeout},
+		{"HTTP_WRITE_TIMEOUT", c.HTTP.WriteTimeout},
+		{"HTTP_IDLE_TIMEOUT", c.HTTP.IdleTimeout},
+		{"HTTP_REQUEST_TIMEOUT", c.HTTP.RequestTimeout},
+		{"HTTP_SHUTDOWN_TIMEOUT", c.HTTP.ShutdownTimeout},
+		{"DB_CONNECT_TIMEOUT", c.DB.ConnectTimeout},
+		{"OUTBOX_POLL_INTERVAL", c.Outbox.PollInterval},
+		{"OUTBOX_BASE_BACKOFF", c.Outbox.BaseBackoff},
+		{"OUTBOX_MAX_BACKOFF", c.Outbox.MaxBackoff},
+		{"OUTBOX_LEASE", c.Outbox.Lease},
+		{"OUTBOX_HTTP_TIMEOUT", c.Outbox.HTTPTimeout},
+		{"REAPER_INTERVAL", c.Reaper.Interval},
+		{"ORDER_ACCEPT_TIMEOUT", c.Reaper.OrderAcceptTimeout},
+		{"IDEMPOTENCY_TTL", c.Idempot.TTL},
+	}
+	for _, d := range positive {
+		if d.value <= 0 {
+			errs = append(errs, fmt.Errorf("%s должен быть положительным, получено %s", d.name, d.value))
+		}
+	}
+
+	// Потолок повторов ниже стартовой задержки означает, что рост отключён и
+	// backoff вырождается в постоянный интервал — почти наверняка опечатка.
+	if c.Outbox.MaxBackoff > 0 && c.Outbox.BaseBackoff > c.Outbox.MaxBackoff {
+		errs = append(errs, fmt.Errorf(
+			"OUTBOX_BASE_BACKOFF (%s) не может превышать OUTBOX_MAX_BACKOFF (%s)",
+			c.Outbox.BaseBackoff, c.Outbox.MaxBackoff))
+	}
+
+	// Сервис не успеет корректно погасить соединения, если на остановку
+	// отведено меньше, чем на один запрос.
+	if c.HTTP.ShutdownTimeout > 0 && c.HTTP.RequestTimeout > c.HTTP.ShutdownTimeout {
+		errs = append(errs, fmt.Errorf(
+			"HTTP_REQUEST_TIMEOUT (%s) не может превышать HTTP_SHUTDOWN_TIMEOUT (%s)",
+			c.HTTP.RequestTimeout, c.HTTP.ShutdownTimeout))
 	}
 
 	return errs

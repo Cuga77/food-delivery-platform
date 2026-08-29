@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1099,4 +1100,104 @@ func TestReaperWorker_CancelsStaleOrdersAndPurgesKeys(t *testing.T) {
 	require.Len(t, cancelled.Timeline, 2)
 	assert.Equal(t, domain.ActorSystem, cancelled.Timeline[1].Actor,
 		"инициатором отмены записана платформа")
+}
+
+// ---------------------------------------------------------------------------
+// Симметрия операций с остатком
+// ---------------------------------------------------------------------------
+
+// Списание обязано отказать, если позиция уехала в архивную версию меню.
+//
+// Сценарий: заказ уже прочитал опубликованное меню и держит идентификаторы
+// позиций, а заведение в этот момент публикует новую версию. Без проверки
+// статуса меню списание ушло бы в архивную строку — продажа из меню, которого
+// больше нет на витрине, по ценам, которых заведение не заявляет, при этом
+// остатки новой версии остались бы нетронутыми.
+func TestMenuRepo_DecreaseStock_RefusesArchivedMenu(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	oldSnapshot := env.seedMenu(t, restaurant.ID, pizzaMenu())
+	oldPizzaID := env.productID(t, oldSnapshot, "pizza_margherita")
+
+	// Списание из опубликованной версии проходит.
+	require.NoError(t, env.menus.DecreaseStock(ctx, oldPizzaID, 1))
+	assert.Equal(t, int32(9), *env.stockOf(t, oldPizzaID))
+
+	// Заведение публикует новую версию — прежняя уходит в архив.
+	newSnapshot := env.seedMenu(t, restaurant.ID, pizzaMenu())
+	newPizzaID := env.productID(t, newSnapshot, "pizza_margherita")
+	require.NotEqual(t, oldPizzaID, newPizzaID)
+
+	// Списание из архивной версии отклоняется с внятной причиной.
+	err := env.menus.DecreaseStock(ctx, oldPizzaID, 1)
+	require.Error(t, err)
+	assert.Equal(t, domain.CodeProductUnavailable, domain.CodeOf(err))
+	assert.Contains(t, err.Error(), "обновило меню")
+
+	assert.Equal(t, int32(9), *env.stockOf(t, oldPizzaID), "архивный остаток не тронут")
+	assert.Equal(t, int32(10), *env.stockOf(t, newPizzaID), "актуальный остаток не тронут")
+}
+
+// Индекс под очередь заказов должен существовать после миграций, а прежний —
+// быть удалён: он не обслуживал ни один запрос и только дорожал вставки.
+func TestMigrations_OrdersQueueIndex(t *testing.T) {
+	ctx := context.Background()
+
+	var hasNew, hasOld bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes
+		                WHERE tablename='orders' AND indexname='idx_orders_restaurant_recent')`).Scan(&hasNew))
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes
+		                WHERE tablename='orders' AND indexname='idx_orders_restaurant_status')`).Scan(&hasOld))
+
+	assert.True(t, hasNew, "индекс очереди заказов создан")
+	assert.False(t, hasOld, "прежний индекс (restaurant_id, status) удалён")
+}
+
+// Очередь заказов обязана читаться по индексу, а не полным сканированием.
+// Это защита от возврата к плану, который на 120 000 заказов занимал 829 мс.
+func TestOrderRepo_ListByRestaurant_UsesIndex(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	// Достаточно строк, чтобы планировщику было что выбирать.
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO orders (public_number, user_external_id, restaurant_id, status,
+		                    delivery_address, subtotal_kopecks, delivery_fee_kopecks,
+		                    total_kopecks, created_at)
+		SELECT gen_random_uuid(), 'u'||g, $1, 'NEW', 'ул. Ленина, 10',
+		       60000, 0, 60000, NOW() - (g || ' seconds')::interval
+		FROM generate_series(1, 5000) g`, restaurant.ID)
+	require.NoError(t, err)
+	_, err = testPool.Exec(ctx, `ANALYZE orders`)
+	require.NoError(t, err)
+
+	// EXPLAIN отдаёт план построчно, поэтому собираем его целиком: QueryRow
+	// вернул бы только верхний узел («Limit») и проверка стала бы бессмысленной.
+	rows, err := testPool.Query(ctx, `
+		EXPLAIN (FORMAT TEXT)
+		SELECT o.id FROM orders o
+		JOIN restaurants r ON r.id = o.restaurant_id
+		WHERE o.restaurant_id = $1 AND (NULL::text IS NULL OR o.status = NULL::text)
+		ORDER BY o.created_at DESC, o.id DESC LIMIT 50`, restaurant.ID)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, rows.Err())
+	plan := strings.Join(lines, "\n")
+
+	assert.Contains(t, plan, "idx_orders_restaurant_recent",
+		"выборка очереди должна опираться на индекс, план: %s", plan)
+	assert.NotContains(t, plan, "Seq Scan on orders",
+		"полное сканирование заказов недопустимо, план: %s", plan)
 }

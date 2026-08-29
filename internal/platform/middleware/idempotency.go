@@ -91,12 +91,7 @@ func Idempotency(repo app.IdempotencyRepo, ttl time.Duration, log *slog.Logger) 
 			completed = true
 
 			if recorder.status >= http.StatusOK && recorder.status < http.StatusMultipleChoices {
-				if err := repo.Complete(ctx, key, recorder.status, recorder.body.Bytes()); err != nil {
-					// Ответ клиенту уже ушёл; повтор с тем же ключом просто
-					// выполнится заново. Логируем и живём дальше.
-					log.ErrorContext(ctx, "не удалось сохранить ответ идемпотентной операции",
-						slog.String("idempotency_key", key), slog.Any("error", err))
-				}
+				completeKey(ctx, repo, key, recorder, log)
 				return
 			}
 
@@ -126,6 +121,30 @@ func replayOrReject(w http.ResponseWriter, r *http.Request, existing app.Idempot
 		w.Header().Set("Idempotent-Replay", "true")
 		w.WriteHeader(existing.ResponseStatus)
 		_, _ = w.Write(existing.ResponseBody)
+	}
+}
+
+// completeKey фиксирует успешный ответ за захваченным ключом.
+//
+// Выполняется на контексте, отвязанном от запроса. Ответ клиенту уже отправлен,
+// и его контекст к этому моменту может быть отменён — клиент отсоединился или
+// сработал таймаут прослойки. Если позволить записи сорваться вместе с ним,
+// ключ останется в состоянии «выполняется» до истечения TTL (сутки), и повтор
+// получит IDEMPOTENCY_IN_PROGRESS вместо сохранённого ответа. Операция при
+// этом уже выполнена — заказ создан.
+func completeKey(
+	ctx context.Context,
+	repo app.IdempotencyRepo,
+	key string,
+	recorder *responseRecorder,
+	log *slog.Logger,
+) {
+	completeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+
+	if err := repo.Complete(completeCtx, key, recorder.status, recorder.body.Bytes()); err != nil {
+		log.ErrorContext(completeCtx, "не удалось сохранить ответ идемпотентной операции",
+			slog.String("idempotency_key", key), slog.Any("error", err))
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,7 +112,7 @@ func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	back := backLink{URL: r.PostFormValue("back_url"), Label: "Вернуться к меню"}
+	back := backLink{URL: safeReturnPath(r.PostFormValue("back_url")), Label: "Вернуться к меню"}
 	if back.URL == "" {
 		back = backToRestaurants
 	}
@@ -208,6 +209,38 @@ func cartFromForm(r *http.Request) []domain.DraftItem {
 	return items
 }
 
+// safeReturnPath пропускает только относительный путь внутри этого сайта.
+//
+// Значение приходит из формы и попадает в href кнопки «вернуться» на странице
+// ошибки. Без проверки это готовый фишинговый рычаг: злоумышленник подсовывает
+// ссылку, жертва видит настоящую страницу сервиса с кнопкой, ведущей на чужой
+// сайт. html/template обезвреживает схему javascript:, но внешний https-адрес
+// пропускает — от подмены адреса шаблонизатор не защищает.
+//
+// Пустая строка означает «использовать умолчание вызывающего».
+func safeReturnPath(raw string) string {
+	// Путь обязан начинаться с одного слэша. Два слэша — это адрес вида
+	// //evil.example.com, который браузер трактует как внешний сайт.
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+		return ""
+	}
+
+	// Обратный слэш браузеры местами приравнивают к прямому: /\evil.example.com
+	// уводит на чужой домен.
+	if strings.HasPrefix(raw, "/\\") || strings.ContainsAny(raw, "\\\r\n") {
+		return ""
+	}
+
+	// Разбор отсекает адреса вроде /path\x00 и подтверждает, что схемы и хоста
+	// в значении нет.
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "" || parsed.Host != "" {
+		return ""
+	}
+
+	return parsed.String()
+}
+
 // webUserID возвращает идентификатор пользователя.
 //
 // Аутентификация пользователей в MVP не реализуется (см. README), поэтому
@@ -286,10 +319,17 @@ func (h *Handler) completeOrderForm(ctx context.Context, key, publicNumber strin
 		return
 	}
 
-	if err := h.idempotency.Complete(ctx, webIdempotencyPrefix+key, http.StatusSeeOther, body); err != nil {
+	// Контекст запроса к этому моменту может быть уже отменён: клиент получил
+	// редирект и отсоединился. Записать результат нужно всё равно, иначе ключ
+	// останется «выполняющимся» до конца TTL, и повтор формы получит отказ
+	// вместо ссылки на созданный заказ.
+	completeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+
+	if err := h.idempotency.Complete(completeCtx, webIdempotencyPrefix+key, http.StatusSeeOther, body); err != nil {
 		// Заказ создан и пользователь его увидит; повтор формы в худшем случае
 		// выполнится заново. Логируем и не мешаем ответу.
-		h.log.ErrorContext(ctx, "не удалось сохранить результат формы заказа",
+		h.log.ErrorContext(completeCtx, "не удалось сохранить результат формы заказа",
 			"idempotency_key", key, "error", err)
 	}
 }

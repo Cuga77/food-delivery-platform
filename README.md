@@ -364,6 +364,14 @@ CREATE INDEX idx_outbox_pending ON outbox_events (next_retry_at)
 CREATE INDEX idx_orders_stale_new ON orders (created_at) WHERE status = 'NEW';
 ```
 
+**Порядок индекса совпадает с `ORDER BY`.** Очередь заказов заведения читается
+индексом `(restaurant_id, created_at DESC, id DESC)`, поэтому сортировка не
+выполняется вовсе, а `LIMIT` останавливает чтение. Прежний
+`(restaurant_id, status)` этот запрос не обслуживал: конструкция
+`($2 IS NULL OR status = $2)` не сарджируема, и на 120 000 заказов выборка
+первых 50 занимала 829 мс полным сканированием. Замер и разбор —
+в [`migrations/000003_orders_queue_index.up.sql`](migrations/000003_orders_queue_index.up.sql).
+
 **Ровно одно опубликованное меню** гарантируется частичным уникальным индексом,
 а не проверкой в коде.
 
