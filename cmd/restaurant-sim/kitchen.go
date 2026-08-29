@@ -113,24 +113,40 @@ func (k *kitchen) handleOrderCreated(ctx context.Context, event eventEnvelope, l
 		slog.Int("positions", len(payload.Items)),
 		slog.Int64("total_kopecks", payload.TotalKopecks))
 
-	switch {
-	case k.cfg.RejectAll:
-		// Аварийный режим: отказываемся немедленно, чтобы платформа вернула
-		// остатки и не держала заказ.
-		k.startPipeline(payload.PublicNumber, []stage{
-			{delay: 0, status: statusRejected, comment: "кухня не принимает заказы"},
-		})
-
-	case k.cfg.AutoAccept:
-		k.startPipeline(payload.PublicNumber, []stage{
-			{delay: k.cfg.AcceptDelay, status: statusAccepted, comment: "заказ принят"},
-			{delay: k.cfg.CookingTime, status: statusCooking, comment: "начали готовить"},
-			{delay: k.cfg.ReadyDelay, status: statusReady, comment: "заказ готов"},
-		})
-
-	default:
+	stages := pipelineFor(k.cfg)
+	if len(stages) == 0 {
 		// Ручной режим: заказ ждёт решения оператора через партнёрское API.
 		log.InfoContext(ctx, "автоприёмка выключена — заказ ожидает решения оператора")
+		return
+	}
+
+	k.startPipeline(payload.PublicNumber, stages)
+}
+
+// pipelineFor строит последовательность переходов по режиму работы кухни.
+//
+// Вынесено отдельной функцией, потому что порядок статусов обязан совпадать с
+// разрешёнными переходами конечного автомата платформы: NEW → ACCEPTED →
+// COOKING → READY. Ошибка здесь означала бы, что сим получает STATE_CONFLICT
+// на каждом заказе. Пустой результат — ручной режим.
+func pipelineFor(cfg simConfig) []stage {
+	switch {
+	case cfg.RejectAll:
+		// Аварийный режим: отказываемся немедленно, чтобы платформа вернула
+		// остатки и не держала заказ.
+		return []stage{
+			{delay: 0, status: statusRejected, comment: "кухня не принимает заказы"},
+		}
+
+	case cfg.AutoAccept:
+		return []stage{
+			{delay: cfg.AcceptDelay, status: statusAccepted, comment: "заказ принят"},
+			{delay: cfg.CookingTime, status: statusCooking, comment: "начали готовить"},
+			{delay: cfg.ReadyDelay, status: statusReady, comment: "заказ готов"},
+		}
+
+	default:
+		return nil
 	}
 }
 

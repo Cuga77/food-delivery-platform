@@ -192,14 +192,24 @@ func (r *MenuRepo) insertProducts(ctx context.Context, menuID int64, products []
 // параллельная транзакция. Строка блокируется на время транзакции, поэтому
 // два одновременных заказа на последнюю единицу выстраиваются в очередь и
 // второй получает OUT_OF_STOCK.
+//
+// Условие `m.status = 'published'` симметрично такому же в RestoreStock и
+// закрывает отдельную гонку: между чтением меню и списанием заведение может
+// успеть опубликовать новую версию. Без проверки заказ списался бы со строки
+// архивной версии — из меню, которого уже нет на витрине, и по ценам, которых
+// заведение больше не заявляет, при этом остатки новой версии остались бы
+// нетронутыми. Теперь такая попытка честно отклоняется.
 func (r *MenuRepo) DecreaseStock(ctx context.Context, productID int64, qty int32) error {
 	const query = `
-		UPDATE products
-		SET stock_qty = stock_qty - $2
-		WHERE id = $1
-		  AND available = TRUE
-		  AND (stock_qty IS NULL OR stock_qty >= $2)
-		RETURNING stock_qty`
+		UPDATE products p
+		SET stock_qty = p.stock_qty - $2
+		FROM menus m
+		WHERE p.id = $1
+		  AND m.id = p.menu_id
+		  AND m.status = 'published'
+		  AND p.available = TRUE
+		  AND (p.stock_qty IS NULL OR p.stock_qty >= $2)
+		RETURNING p.stock_qty`
 
 	var remaining *int32
 	err := r.db(ctx).QueryRow(ctx, query, productID, qty).Scan(&remaining)
@@ -217,23 +227,31 @@ func (r *MenuRepo) DecreaseStock(ctx context.Context, productID int64, qty int32
 
 func (r *MenuRepo) explainStockFailure(ctx context.Context, productID int64, qty int32) error {
 	const query = `
-		SELECT product_key, name, available, stock_qty
-		FROM products
-		WHERE id = $1`
+		SELECT p.product_key, p.name, p.available, p.stock_qty, m.status
+		FROM products p
+		JOIN menus m ON m.id = p.menu_id
+		WHERE p.id = $1`
 
 	var (
 		productKey string
 		name       string
 		available  bool
 		stockQty   *int32
+		menuStatus string
 	)
-	err := r.db(ctx).QueryRow(ctx, query, productID).Scan(&productKey, &name, &available, &stockQty)
+	err := r.db(ctx).QueryRow(ctx, query, productID).
+		Scan(&productKey, &name, &available, &stockQty, &menuStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Errorf(domain.CodeProductUnavailable,
 			"позиция была удалена из меню, пока формировался заказ")
 	}
 	if err != nil {
 		return wrapDBError(err, "уточнение причины отказа в списании остатка")
+	}
+
+	if menuStatus != string(domain.MenuPublished) {
+		return domain.Errorf(domain.CodeProductUnavailable,
+			"заведение обновило меню, пока формировался заказ — соберите корзину заново")
 	}
 
 	if !available {

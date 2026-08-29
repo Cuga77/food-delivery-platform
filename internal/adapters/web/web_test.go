@@ -511,3 +511,63 @@ func TestPartnerPanel_HTMXRedirectsViaHeader(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	assert.Equal(t, "/partner/login", rec.Header().Get("HX-Redirect"))
 }
+
+// --- Возврат со страницы ошибки ---------------------------------------------
+
+// back_url приходит из формы и попадает в href кнопки «вернуться» на странице
+// ошибки. Без проверки это фишинговый рычаг: жертва видит настоящую страницу
+// сервиса с кнопкой, ведущей на чужой сайт. html/template обезвреживает схему
+// javascript:, но подмену адреса на https://evil он не ловит — это не его
+// задача.
+func TestCreateOrder_RejectsExternalBackURL(t *testing.T) {
+	t.Parallel()
+
+	hostile := []string{
+		"https://evil.example.com/phish",
+		"http://evil.example.com",
+		"//evil.example.com",  // протокол-относительный адрес
+		"/\\evil.example.com", // обратный слэш браузеры трактуют как прямой
+		"javascript:alert(1)",
+		"/restaurants\r\nSet-Cookie: a=b", // попытка расщепления ответа
+	}
+
+	for _, raw := range hostile {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			h, _ := newTestServer(t)
+
+			// Пустая корзина — гарантированно попадаем на страницу ошибки.
+			rec := postForm(t, h, "/orders", url.Values{
+				"restaurant_id":    {"1"},
+				"delivery_address": {"ул. Ленина, 10"},
+				"idempotency_key":  {uuid.NewString()},
+				"back_url":         {raw},
+			})
+
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			body := rec.Body.String()
+
+			assert.NotContains(t, body, "evil.example.com",
+				"внешний адрес не должен попадать на страницу")
+			assert.Contains(t, body, `href="/restaurants"`,
+				"вместо него подставляется безопасное умолчание")
+		})
+	}
+}
+
+func TestCreateOrder_KeepsRelativeBackURL(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newTestServer(t)
+
+	rec := postForm(t, h, "/orders", url.Values{
+		"restaurant_id":    {"1"},
+		"delivery_address": {"ул. Ленина, 10"},
+		"idempotency_key":  {uuid.NewString()},
+		"back_url":         {"/restaurants/pizza-avito"},
+	})
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), `href="/restaurants/pizza-avito"`,
+		"свой относительный путь сохраняется")
+}
