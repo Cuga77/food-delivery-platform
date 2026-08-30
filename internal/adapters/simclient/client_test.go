@@ -139,7 +139,7 @@ func TestDeliver_UnreachableIsTransient(t *testing.T) {
 	err := simclient.New(time.Second).Deliver(t.Context(), srv.URL, testEvent())
 
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, app.ErrDeliveryRejected), "повторить стоит")
+	require.NotErrorIs(t, err, app.ErrDeliveryRejected, "повторить стоит")
 	assert.Equal(t, domain.CodeServiceUnavailable, domain.CodeOf(err))
 }
 
@@ -160,7 +160,7 @@ func TestDeliver_TimeoutIsTransient(t *testing.T) {
 	err := simclient.New(100*time.Millisecond).Deliver(t.Context(), srv.URL, testEvent())
 
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, app.ErrDeliveryRejected))
+	assert.NotErrorIs(t, err, app.ErrDeliveryRejected)
 }
 
 // Отмена контекста не должна выглядеть как отказ заведения.
@@ -186,7 +186,7 @@ func TestDeliver_ContextCancellation(t *testing.T) {
 	err := simclient.New(5*time.Second).Deliver(ctx, srv.URL, testEvent())
 
 	require.Error(t, err)
-	assert.False(t, errors.Is(err, app.ErrDeliveryRejected))
+	assert.NotErrorIs(t, err, app.ErrDeliveryRejected)
 }
 
 func readAll(r *http.Request) ([]byte, error) {

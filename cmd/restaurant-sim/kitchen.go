@@ -250,7 +250,7 @@ func (k *kitchen) Shutdown(ctx context.Context) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		k.log.Warn("часть конвейеров не завершилась до истечения таймаута остановки")
+		k.log.WarnContext(ctx, "часть конвейеров не завершилась до истечения таймаута остановки")
 	}
 }
 

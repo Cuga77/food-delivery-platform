@@ -2,7 +2,6 @@ package web_test
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +40,7 @@ func newTestServer(t *testing.T) (http.Handler, *apptest.Env) {
 		Partner:        env.Partners,
 		Idempotency:    env.Idempotency,
 		IdempotencyTTL: time.Hour,
-		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 	require.NoError(t, err)
 

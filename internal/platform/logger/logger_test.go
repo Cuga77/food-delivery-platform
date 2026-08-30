@@ -159,7 +159,9 @@ func TestNew_WritesJSON(t *testing.T) {
 		slog.Int("orders", 3))
 
 	record := parse(t, &buf)
-	assert.Equal(t, float64(3), record["orders"])
+	// JSON разбирается в float64; сравниваем через EqualValues, чтобы не
+	// сравнивать вещественные числа на точное равенство.
+	assert.EqualValues(t, 3, record["orders"])
 	assert.Contains(t, record, "time")
 	assert.Equal(t, "INFO", record["level"])
 }

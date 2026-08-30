@@ -3,7 +3,6 @@ package http_test
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -47,7 +46,7 @@ func newRouter(t *testing.T, pinger kitchenhttp.Pinger) http.Handler {
 		IdempotencyTTL: time.Hour,
 		RequestTimeout: 5 * time.Second,
 		CORSOrigins:    []string{"*"},
-		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:         slog.New(slog.DiscardHandler),
 	})
 }
 

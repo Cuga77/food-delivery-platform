@@ -51,10 +51,14 @@ func TestPartnerService_SyncMenu_PublishesNextVersion(t *testing.T) {
 	ctx := context.Background()
 
 	result, err := env.Partners.SyncMenu(ctx, 1, []domain.Product{
-		{ProductKey: "pizza_margherita", Category: "Пицца", Name: "Пицца Маргарита",
-			PriceKopecks: 62000, Available: true, StockQty: ptrInt32(20)},
-		{ProductKey: "pizza_new", Category: "Пицца", Name: "Новинка",
-			PriceKopecks: 71000, Available: true},
+		{
+			ProductKey: "pizza_margherita", Category: "Пицца", Name: "Пицца Маргарита",
+			PriceKopecks: 62000, Available: true, StockQty: ptrInt32(20),
+		},
+		{
+			ProductKey: "pizza_new", Category: "Пицца", Name: "Новинка",
+			PriceKopecks: 71000, Available: true,
+		},
 	})
 	require.NoError(t, err)
 
@@ -187,8 +191,10 @@ func TestPartnerService_SyncMenu_RejectsHugePrice(t *testing.T) {
 	env := newTestEnv()
 
 	_, err := env.Partners.SyncMenu(context.Background(), 1, []domain.Product{
-		{ProductKey: "p1", Category: "Пицца", Name: "Золотая пицца",
-			PriceKopecks: domain.MaxPriceKopecks + 1, Available: true},
+		{
+			ProductKey: "p1", Category: "Пицца", Name: "Золотая пицца",
+			PriceKopecks: domain.MaxPriceKopecks + 1, Available: true,
+		},
 	})
 
 	require.Error(t, err)

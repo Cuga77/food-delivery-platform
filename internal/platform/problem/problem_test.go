@@ -81,8 +81,8 @@ func TestErrorCodes_DomainMatchesContract(t *testing.T) {
 		inContract[string(c)] = struct{}{}
 	}
 
-	require.Equal(t, len(inDomain), len(domainCodes()), "в списке домена есть дубли")
-	require.Equal(t, len(inContract), len(contractCodes()), "в списке контракта есть дубли")
+	require.Len(t, domainCodes(), len(inDomain), "в списке домена есть дубли")
+	require.Len(t, contractCodes(), len(inContract), "в списке контракта есть дубли")
 
 	for code := range inDomain {
 		assert.Containsf(t, inContract, code,

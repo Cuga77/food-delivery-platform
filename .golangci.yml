@@ -32,15 +32,91 @@ linters:
     - unparam
     - wastedassign
     - whitespace
+    # --- Инструменты, специфичные для стека проекта ---
+    - depguard        # направление зависимостей между слоями
+    - testifylint     # весь проект на testify: ловит require в горутинах и т.п.
+    - sloglint        # весь проект на slog: единый стиль атрибутов
+    - musttag         # структуры, которые сериализуются в JSON
+    - nolintlint      # директивы nolint обязаны быть живыми и объяснёнными
+
+    # --- Дешёвые страховки от известных классов ошибок ---
+    - bidichk         # опасные управляющие символы Unicode
+    - errname         # именование ошибок
+    - fatcontext      # контекст, накапливаемый в цикле
+    - makezero        # make([]T, n) с последующим append
+    - nilnil          # возврат (nil, nil) из функции с ошибкой
+    - asasalint       # []any, переданный в вариативный any
+    - reassign        # переприсваивание переменных чужих пакетов
+    - mirror          # string/[]byte-варианты одной и той же функции
+    - gocheckcompilerdirectives # опечатки в //go: директивах
+    - godot           # комментарии-декларации заканчиваются точкой
+
+    # --- Модернизация под возможности актуального Go ---
+    - copyloopvar
+    - intrange
+    - usetesting
 
   settings:
     exhaustive:
       default-signifies-exhaustive: true
+
+    # Направление зависимостей — не пожелание в README, а проверяемое правило.
+    # Домен не знает ни о чём, кроме стандартной библиотеки; use cases не знают
+    # ни о HTTP, ни о SQL, ни о сгенерированных моделях контракта. Нарушение
+    # такой границы обычно вносится «на минутку» и остаётся навсегда.
+    depguard:
+      rules:
+        domain:
+          files:
+            - "**/internal/domain/*.go"
+          deny:
+            - pkg: avito-kitchen/internal/app
+              desc: домен не зависит от use cases — зависимости направлены внутрь
+            - pkg: avito-kitchen/internal/adapters
+              desc: домен не знает ни о HTTP, ни о SQL
+            - pkg: avito-kitchen/internal/platform
+              desc: домен не знает о транспорте и инфраструктуре
+            - pkg: avito-kitchen/internal/gen
+              desc: домен не зависит от формы контракта
+            - pkg: net/http
+              desc: домен не знает о протоколе
+            - pkg: github.com/jackc/pgx
+              desc: домен не знает о драйвере БД
+            - pkg: github.com/go-chi
+              desc: домен не знает о маршрутизаторе
+
+        app:
+          files:
+            - "**/internal/app/*.go"
+          deny:
+            - pkg: avito-kitchen/internal/adapters
+              desc: use case вызывает адаптеры через порты, а не напрямую
+            - pkg: avito-kitchen/internal/gen
+              desc: use case не зависит от формы контракта
+            - pkg: net/http
+              desc: use case не знает о протоколе — коды ошибок доменные
+            - pkg: github.com/jackc/pgx
+              desc: работа с БД скрыта за портами репозиториев
+            - pkg: github.com/go-chi
+              desc: use case не знает о маршрутизаторе
+
+    # Проект последователен в стиле логирования: везде slog.String/slog.Any,
+    # а не пары «ключ, значение». Смешение двух стилей в одном файле — то, что
+    # замечаешь только при чтении диффа.
+    sloglint:
+      attr-only: true
+      context: scope
+      static-msg: false
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    testifylint:
+      enable-all: true
     errcheck:
       check-type-assertions: true
-    gosec:
-      excludes:
-        - G404  # math/rand допустим для джиттера backoff
     goconst:
       min-len: 3
       min-occurrences: 4
@@ -91,13 +167,26 @@ linters:
           - dupl
 
 formatters:
+  # gofumpt здесь намеренно не включён, хотя проект им форматируется.
+  #
+  # Версия gofumpt, вшитая в golangci-lint v2.13.1, расходится с актуальной:
+  # она считает неотформатированными файлы, которые настоящий gofumpt (даже с
+  # -modpath) принимает, и `golangci-lint fmt` эту разницу не устраняет —
+  # проверка остаётся красной навсегда. Держать заведомо не сходящуюся
+  # проверку хуже, чем не держать никакой: к красному линтеру привыкают.
+  #
+  # Поэтому gofumpt запускается отдельным инструментом: `make fmt` применяет,
+  # `make fmt-check` проверяет, CI падает при расхождении. Здесь остаётся
+  # только порядок импортов.
   enable:
-    - gofmt
-    - goimports
+    - gci
   settings:
-    goimports:
-      local-prefixes:
-        - avito-kitchen
+    gci:
+      sections:
+        - standard                 # стандартная библиотека
+        - default                  # внешние зависимости
+        - prefix(avito-kitchen)    # свои пакеты — последними
+      custom-order: true
   exclusions:
     generated: strict
     paths:

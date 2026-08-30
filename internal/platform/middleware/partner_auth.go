@@ -10,7 +10,7 @@ import (
 )
 
 // PartnerTokenHeader — заголовок с партнёрским токеном.
-const PartnerTokenHeader = "X-Partner-Token" //nolint:gosec // это имя заголовка, а не сам токен
+const PartnerTokenHeader = "X-Partner-Token"
 
 type restaurantContextKey struct{}
 
