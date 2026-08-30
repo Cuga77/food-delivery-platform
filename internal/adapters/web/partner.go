@@ -75,11 +75,18 @@ type partnerPanelData struct {
 	Restaurant domain.Restaurant
 	Orders     []domain.Order
 	Status     string
+	// Cursor — курсор текущей страницы; нужен, чтобы автообновление опрашивало
+	// ту страницу, которую заведение сейчас смотрит, а не возвращало его в
+	// начало очереди каждые пять секунд.
+	Cursor     string
+	NextCursor string
 }
 
 type partnerOrdersData struct {
-	Orders []domain.Order
-	Status string
+	Orders     []domain.Order
+	Status     string
+	Cursor     string
+	NextCursor string
 }
 
 // partnerPanel — рабочее место заведения.
@@ -95,7 +102,7 @@ func (h *Handler) partnerPanel(w http.ResponseWriter, r *http.Request) {
 
 	statusFilter := r.URL.Query().Get("status")
 
-	orders, err := h.listPartnerOrders(r, restaurant.ID, statusFilter)
+	page, err := h.listPartnerOrders(r, restaurant.ID, statusFilter)
 	if err != nil {
 		h.renderError(w, r, err, backLink{URL: partnerPanelPath, Label: "Обновить панель"})
 		return
@@ -104,8 +111,10 @@ func (h *Handler) partnerPanel(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, http.StatusOK, pagePartnerPanel, partnerPanelData{
 		Title:      restaurant.Name + " — панель",
 		Restaurant: restaurant,
-		Orders:     orders,
+		Orders:     page.Items,
 		Status:     statusFilter,
+		Cursor:     r.URL.Query().Get("cursor"),
+		NextCursor: page.NextCursor,
 	})
 }
 
@@ -119,26 +128,37 @@ func (h *Handler) partnerOrders(w http.ResponseWriter, r *http.Request) {
 
 	statusFilter := r.URL.Query().Get("status")
 
-	orders, err := h.listPartnerOrders(r, restaurant.ID, statusFilter)
+	page, err := h.listPartnerOrders(r, restaurant.ID, statusFilter)
 	if err != nil {
 		h.renderError(w, r, err, backLink{URL: partnerPanelPath, Label: "Обновить панель"})
 		return
 	}
 
 	h.render(w, r, http.StatusOK, partialPartnerOrders, partnerOrdersData{
-		Orders: orders,
-		Status: statusFilter,
+		Orders:     page.Items,
+		Status:     statusFilter,
+		Cursor:     r.URL.Query().Get("cursor"),
+		NextCursor: page.NextCursor,
 	})
 }
 
-func (h *Handler) listPartnerOrders(r *http.Request, restaurantID int64, statusFilter string) ([]domain.Order, error) {
-	var status *domain.OrderStatus
-	if statusFilter != "" {
-		s := domain.OrderStatus(statusFilter)
-		status = &s
+func (h *Handler) listPartnerOrders(
+	r *http.Request,
+	restaurantID int64,
+	statusFilter string,
+) (app.OrderPage, error) {
+	query := app.ListOrdersQuery{
+		RestaurantID: restaurantID,
+		Limit:        partnerOrdersLimit,
+		Cursor:       r.URL.Query().Get("cursor"),
 	}
 
-	return h.partner.ListOrders(r.Context(), restaurantID, status, partnerOrdersLimit)
+	if statusFilter != "" {
+		status := domain.OrderStatus(statusFilter)
+		query.Status = &status
+	}
+
+	return h.partner.ListOrders(r.Context(), query)
 }
 
 // partnerKitchenStatus переключает режим работы кухни.

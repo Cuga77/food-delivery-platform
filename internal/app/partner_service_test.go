@@ -151,25 +151,29 @@ func TestPartnerService_ListOrders(t *testing.T) {
 	order, err := env.Orders.Create(ctx, draft(domain.DraftItem{ProductKey: "pizza_margherita", Qty: 2}))
 	require.NoError(t, err)
 
-	all, err := env.Partners.ListOrders(ctx, 1, nil, 0)
+	all, err := env.Partners.ListOrders(ctx, app.ListOrdersQuery{RestaurantID: 1})
 	require.NoError(t, err)
-	require.Len(t, all, 1)
-	assert.Equal(t, order.PublicNumber, all[0].PublicNumber)
+	require.Len(t, all.Items, 1)
+	assert.Equal(t, order.PublicNumber, all.Items[0].PublicNumber)
 
 	newStatus := domain.StatusNew
-	filtered, err := env.Partners.ListOrders(ctx, 1, &newStatus, 0)
+	filtered, err := env.Partners.ListOrders(ctx, app.ListOrdersQuery{
+		RestaurantID: 1, Status: &newStatus,
+	})
 	require.NoError(t, err)
-	assert.Len(t, filtered, 1)
+	assert.Len(t, filtered.Items, 1)
 
 	ready := domain.StatusReady
-	empty, err := env.Partners.ListOrders(ctx, 1, &ready, 0)
+	empty, err := env.Partners.ListOrders(ctx, app.ListOrdersQuery{
+		RestaurantID: 1, Status: &ready,
+	})
 	require.NoError(t, err)
-	assert.Empty(t, empty)
+	assert.Empty(t, empty.Items)
 
 	// Чужие заказы в очередь заведения не попадают.
-	foreign, err := env.Partners.ListOrders(ctx, 2, nil, 0)
+	foreign, err := env.Partners.ListOrders(ctx, app.ListOrdersQuery{RestaurantID: 2})
 	require.NoError(t, err)
-	assert.Empty(t, foreign)
+	assert.Empty(t, foreign.Items)
 }
 
 func TestPartnerService_ListOrders_RejectsUnknownStatus(t *testing.T) {
@@ -178,7 +182,9 @@ func TestPartnerService_ListOrders_RejectsUnknownStatus(t *testing.T) {
 	env := newTestEnv()
 	bogus := domain.OrderStatus("FLYING")
 
-	_, err := env.Partners.ListOrders(context.Background(), 1, &bogus, 0)
+	_, err := env.Partners.ListOrders(context.Background(), app.ListOrdersQuery{
+		RestaurantID: 1, Status: &bogus,
+	})
 	require.Error(t, err)
 	assert.Equal(t, domain.CodeBadRequest, domain.CodeOf(err))
 }

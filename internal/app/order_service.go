@@ -40,6 +40,83 @@ func NewOrderService(
 	}
 }
 
+const (
+	defaultUserOrdersLimit = 20
+	maxUserOrdersLimit     = 100
+	// maxUserExternalIDLen совпадает с VARCHAR(128) у orders.user_external_id:
+	// более длинный идентификатор заведомо ничего не найдёт, и отвечать на него
+	// походом в БД незачем.
+	maxUserExternalIDLen = 128
+)
+
+// OrderPage — страница списка заказов с курсором на следующую.
+type OrderPage struct {
+	Items []domain.Order
+	// NextCursor пуст, когда данные закончились.
+	NextCursor string
+}
+
+// paginateOrders превращает выборку «лимит + 1» в страницу.
+//
+// Лишняя запись наружу не отдаётся: она нужна только чтобы отличить «страница
+// заполнилась ровно» от «дальше ещё есть данные». Иначе последняя страница
+// всегда возвращала бы курсор, а клиент делал бы лишний пустой запрос.
+func paginateOrders(items []domain.Order, limit int32) OrderPage {
+	if len(items) <= int(limit) {
+		return OrderPage{Items: items}
+	}
+
+	page := OrderPage{Items: items[:limit]}
+	last := page.Items[len(page.Items)-1]
+	page.NextCursor = EncodeOrderCursor(OrderCursor{CreatedAt: last.CreatedAt, ID: last.ID})
+
+	return page
+}
+
+// ListUserOrdersQuery — входные параметры истории заказов пользователя.
+type ListUserOrdersQuery struct {
+	UserExternalID string
+	Limit          int32
+	Cursor         string
+}
+
+// ListByUser отдаёт историю заказов пользователя, свежие первыми.
+//
+// Аутентификации пользователей в MVP нет, поэтому user_external_id здесь —
+// ключ доступа к истории, ровно как public_number к отдельному заказу: знаешь
+// значение — видишь данные. Веб-клиент выдаёт каждому браузеру собственный
+// случайный идентификатор, поэтому перебрать чужую историю нельзя, но это
+// свойство держится на неугадываемости значения, а не на проверке прав.
+// Ограничение осознанное и зафиксировано в ADR-0004.
+func (s *OrderService) ListByUser(ctx context.Context, q ListUserOrdersQuery) (OrderPage, error) {
+	if q.UserExternalID == "" {
+		return OrderPage{}, domain.Errorf(domain.CodeValidationError,
+			"не указан user_external_id")
+	}
+	if len(q.UserExternalID) > maxUserExternalIDLen {
+		return OrderPage{}, domain.Errorf(domain.CodeValidationError,
+			"user_external_id длиннее %d символов", maxUserExternalIDLen)
+	}
+
+	limit := normalizeLimit(q.Limit, defaultUserOrdersLimit, maxUserOrdersLimit)
+
+	after, err := DecodeOrderCursor(q.Cursor)
+	if err != nil {
+		return OrderPage{}, err
+	}
+
+	items, err := s.orders.ListByUser(ctx, UserOrderFilter{
+		UserExternalID: q.UserExternalID,
+		After:          after,
+		Limit:          limit + 1,
+	})
+	if err != nil {
+		return OrderPage{}, err
+	}
+
+	return paginateOrders(items, limit), nil
+}
+
 // reservation — намерение списать остаток конкретной позиции меню.
 type reservation struct {
 	productID int64

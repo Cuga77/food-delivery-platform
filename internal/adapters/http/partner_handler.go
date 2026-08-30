@@ -59,23 +59,27 @@ func (h *PartnerHandler) ListPartnerOrders(
 		return nil, err
 	}
 
-	var status *domain.OrderStatus
+	query := app.ListOrdersQuery{RestaurantID: restaurant.ID}
+
 	if request.Params.Status != nil {
-		s := domain.OrderStatus(*request.Params.Status)
-		status = &s
+		status := domain.OrderStatus(*request.Params.Status)
+		query.Status = &status
 	}
-
-	var limit int32
 	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+		query.Limit = *request.Params.Limit
+	}
+	if request.Params.Cursor != nil {
+		query.Cursor = *request.Params.Cursor
 	}
 
-	orders, err := h.partners.ListOrders(ctx, restaurant.ID, status, limit)
+	page, err := h.partners.ListOrders(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	return gen.ListPartnerOrders200JSONResponse{Items: toAPIOrders(orders)}, nil
+	items, nextCursor := toAPIOrderPage(page)
+
+	return gen.ListPartnerOrders200JSONResponse{Items: items, NextCursor: nextCursor}, nil
 }
 
 // UpdateOrderStatus — POST /api/v1/partner/orders/{public_number}/status.

@@ -147,6 +147,54 @@ paths:
           $ref: "#/components/responses/NotFound"
 
   /api/v1/orders:
+    get:
+      tags: [client]
+      operationId: listOrders
+      summary: История заказов пользователя
+      description: |
+        Курсорная (keyset) пагинация, свежие заказы первыми.
+
+        Аутентификации пользователей в MVP нет, поэтому `user_external_id`
+        выступает ключом доступа к истории — как и номер заказа к отдельной
+        карточке. Веб-клиент выдаёт каждому браузеру собственный случайный
+        идентификатор, поэтому перебрать чужую историю нельзя; интеграция с
+        экосистемой Авито подставляет сюда идентификатор из своей сессии.
+      security: []
+      parameters:
+        - name: user_external_id
+          in: query
+          required: true
+          description: Идентификатор пользователя в экосистеме Авито
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Непрозрачный курсор из поля `next_cursor` предыдущего ответа
+          schema:
+            type: string
+            maxLength: 256
+      responses:
+        "200":
+          description: Страница истории заказов
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
     post:
       tags: [client]
       operationId: createOrder
@@ -296,6 +344,10 @@ paths:
       tags: [partner]
       operationId: listPartnerOrders
       summary: Очередь заказов заведения
+      description: |
+        Курсорная (keyset) пагинация, свежие заказы первыми. Заведение с
+        сотнями заказов должно иметь возможность пролистать очередь целиком,
+        а не только увидеть первую страницу.
       parameters:
         - name: status
           in: query
@@ -312,9 +364,16 @@ paths:
             minimum: 1
             maximum: 200
             default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: Непрозрачный курсор из поля `next_cursor` предыдущего ответа
+          schema:
+            type: string
+            maxLength: 256
       responses:
         "200":
-          description: Список заказов
+          description: Страница очереди заказов
           content:
             application/json:
               schema:
@@ -836,6 +895,19 @@ components:
           format: int32
           example: 15
 
+    OrderPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Order"
+        next_cursor:
+          type: string
+          nullable: true
+          description: Курсор следующей страницы; `null` — данные закончились.
+
     PartnerOrderList:
       type: object
       required: [items]
@@ -844,6 +916,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Order"
+        next_cursor:
+          type: string
+          nullable: true
+          description: Курсор следующей страницы; `null` — данные закончились.
 
     UpdateOrderStatusRequest:
       type: object

@@ -284,7 +284,7 @@ func TestCancelOrder_TooLateShowsFriendlyPage(t *testing.T) {
 	h, env := newTestServer(t)
 
 	order, err := env.Orders.Create(context.Background(), domain.OrderDraft{
-		UserExternalID:  "web_guest",
+		UserExternalID:  "usr_fixture",
 		RestaurantID:    1,
 		DeliveryAddress: "ул. Ленина, 10",
 		Items:           []domain.DraftItem{{ProductKey: "pizza_margherita", Qty: 2}},
@@ -431,7 +431,7 @@ func TestPartnerOrderStatus_ForeignOrderForbidden(t *testing.T) {
 	require.NoError(t, err)
 
 	foreign, err := env.Orders.Create(context.Background(), domain.OrderDraft{
-		UserExternalID:  "web_guest",
+		UserExternalID:  "usr_fixture",
 		RestaurantID:    2, // заведение «Суши Авито»
 		DeliveryAddress: "ул. Ленина, 10",
 		Items:           []domain.DraftItem{{ProductKey: "roll_philadelphia", Qty: 2}},
@@ -468,7 +468,7 @@ func TestPartnerOrderStatus_InvalidTransition(t *testing.T) {
 	h, env := newTestServer(t)
 
 	order, err := env.Orders.Create(context.Background(), domain.OrderDraft{
-		UserExternalID:  "web_guest",
+		UserExternalID:  "usr_fixture",
 		RestaurantID:    1,
 		DeliveryAddress: "ул. Ленина, 10",
 		Items:           []domain.DraftItem{{ProductKey: "pizza_margherita", Qty: 2}},
@@ -569,4 +569,172 @@ func TestCreateOrder_KeepsRelativeBackURL(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), `href="/restaurants/pizza-avito"`,
 		"свой относительный путь сохраняется")
+}
+
+// --- Личность посетителя и история заказов ----------------------------------
+
+// visitorCookie достаёт cookie посетителя из ответа.
+func visitorCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "kitchen_visitor" {
+			return c
+		}
+	}
+	t.Fatal("ответ не выдал cookie посетителя")
+
+	return nil
+}
+
+// getWith выполняет GET с набором cookie.
+func getWith(t *testing.T, h http.Handler, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+
+	return do(t, h, req)
+}
+
+// Личность выдаётся вместе с формой заказа, а не при её отправке: к моменту
+// двойного клика браузер уже обязан иметь стабильный идентификатор.
+func TestMenuPage_IssuesVisitorCookie(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	rec := getWith(t, h, "/restaurants/pizza-avito")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	cookie := visitorCookie(t, rec)
+	assert.True(t, cookie.HttpOnly, "недоступна из JavaScript")
+	assert.Equal(t, http.SameSiteLaxMode, cookie.SameSite, "межсайтовый POST не пройдёт")
+	assert.Equal(t, "/", cookie.Path, "нужна на всех клиентских страницах")
+	assert.True(t, strings.HasPrefix(cookie.Value, "web_"), "значение: %s", cookie.Value)
+	assert.Len(t, cookie.Value, 26, "префикс плюс 128 бит в base64url")
+}
+
+// Повторный заход с уже выданной cookie не меняет личность.
+func TestMenuPage_KeepsExistingVisitor(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	first := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+	second := getWith(t, h, "/restaurants/pizza-avito", first)
+
+	for _, c := range second.Result().Cookies() {
+		assert.NotEqual(t, "kitchen_visitor", c.Name, "личность перевыдана без нужды")
+	}
+}
+
+// Два браузера — две истории. Ровно то, ради чего личность и заводилась:
+// до этого все веб-заказы принадлежали одному захардкоженному пользователю.
+func TestMyOrders_SeparatePerBrowser(t *testing.T) {
+	t.Parallel()
+	h, env := newTestServer(t)
+
+	alice := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+	bob := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+	require.NotEqual(t, alice.Value, bob.Value, "браузеры получили разные личности")
+
+	aliceOrder := postForm(t, h, "/orders", orderForm(uuid.NewString(), "1"), alice)
+	require.Equal(t, http.StatusSeeOther, aliceOrder.Code)
+	bobOrder := postForm(t, h, "/orders", orderForm(uuid.NewString(), "1"), bob)
+	require.Equal(t, http.StatusSeeOther, bobOrder.Code)
+	require.Len(t, env.State().Orders, 2)
+
+	aliceNumber := strings.TrimPrefix(aliceOrder.Header().Get("Location"), "/orders/")
+	bobNumber := strings.TrimPrefix(bobOrder.Header().Get("Location"), "/orders/")
+
+	// Сравнение по полному номеру: public_number — UUIDv7, и первые символы у
+	// двух заказов одной миллисекунды совпадают, потому что это таймстамп.
+	page := getWith(t, h, "/orders", alice)
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.Contains(t, page.Body.String(), aliceNumber, "свой заказ виден")
+	assert.NotContains(t, page.Body.String(), bobNumber, "чужой заказ не виден")
+}
+
+// Идентификатор берётся только из cookie: приняв его из запроса, страница
+// стала бы читалкой чужой истории по подставленному значению.
+func TestMyOrders_IgnoresIdentityFromQuery(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	alice := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+	created := postForm(t, h, "/orders", orderForm(uuid.NewString(), "1"), alice)
+	require.Equal(t, http.StatusSeeOther, created.Code)
+	number := strings.TrimPrefix(created.Header().Get("Location"), "/orders/")
+
+	// Злоумышленник знает идентификатор жертвы и подставляет его в адрес.
+	rec := getWith(t, h, "/orders?user_external_id="+alice.Value)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), number, "история по параметру запроса не отдаётся")
+}
+
+func TestMyOrders_WithoutCookieExplainsEmptiness(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	rec := getWith(t, h, "/orders")
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "появятся заказы")
+	assert.Empty(t, rec.Result().Cookies(), "личность ради пустой страницы не выдаётся")
+}
+
+// Подставленное значение cookie не принимается: иначе посетитель назначал бы
+// себе любой user_external_id, в том числе чужой.
+func TestVisitorCookie_ForgedValueRejected(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	forged := []string{"web_guest", "usr_victim", "web_" + strings.Repeat("A", 22) + "extra", ""}
+
+	for _, value := range forged {
+		t.Run("значение "+value, func(t *testing.T) {
+			t.Parallel()
+
+			rec := getWith(t, h, "/restaurants/pizza-avito",
+				&http.Cookie{Name: "kitchen_visitor", Value: value})
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			issued := visitorCookie(t, rec)
+			assert.NotEqual(t, value, issued.Value, "подставленное значение отвергнуто")
+		})
+	}
+}
+
+// Заказ приписывается личности из cookie, а не общему псевдопользователю.
+func TestCreateOrder_AttributesOrderToVisitor(t *testing.T) {
+	t.Parallel()
+	h, env := newTestServer(t)
+
+	visitor := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+	require.Equal(t, http.StatusSeeOther,
+		postForm(t, h, "/orders", orderForm(uuid.NewString(), "1"), visitor).Code)
+
+	for _, order := range env.State().Orders {
+		assert.Equal(t, visitor.Value, order.UserExternalID)
+	}
+}
+
+// Испорченный курсор — понятная ошибка, а не пятисотка.
+func TestPagination_RejectsBrokenCursor(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestServer(t)
+
+	visitor := visitorCookie(t, getWith(t, h, "/restaurants/pizza-avito"))
+
+	rec := getWith(t, h, "/orders?cursor=notacursor", visitor)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	panel := postForm(t, h, "/partner/login", url.Values{"token": {demoToken}})
+	require.Equal(t, http.StatusSeeOther, panel.Code)
+	session := panel.Result().Cookies()[0]
+
+	queue := getWith(t, h, "/partner?cursor=notacursor", session)
+	assert.Equal(t, http.StatusBadRequest, queue.Code)
 }

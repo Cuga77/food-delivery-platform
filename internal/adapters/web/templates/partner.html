@@ -76,9 +76,13 @@
     <a role="button" class="outline{{if ne .Status "READY"}} secondary{{end}}" href="/partner?status=READY">Готовые</a>
   </div>
 
-  {{/* Очередь обновляется на месте: новые заказы приходят от клиентов постоянно. */}}
+  {{/*
+    Очередь обновляется на месте: новые заказы приходят от клиентов постоянно.
+    Курсор текущей страницы входит в адрес опроса — иначе автообновление
+    возвращало бы заведение в начало очереди каждые пять секунд.
+  */}}
   <div id="partner-orders"
-       hx-get="/partner/orders{{if .Status}}?status={{.Status}}{{end}}"
+       hx-get="/partner/orders?status={{.Status}}&cursor={{.Cursor}}"
        hx-trigger="every 5s"
        hx-target="#partner-orders"
        hx-swap="innerHTML">
@@ -133,6 +137,24 @@
 </table>
 {{else}}
 <div class="empty">Заказов нет</div>
+{{end}}
+
+{{/*
+  Пагинация здесь переходом по страницам, а не подгрузкой вниз: очередь
+  обновляется опросом каждые пять секунд, и дописанные htmx строки стёрло бы
+  следующим же обновлением.
+*/}}
+{{if or .NextCursor .Cursor}}
+<div class="toolbar" style="margin-top:1rem">
+  {{if .Cursor}}
+  <a role="button" class="outline secondary"
+     href="/partner{{if .Status}}?status={{.Status}}{{end}}">В начало очереди</a>
+  {{end}}
+  {{if .NextCursor}}
+  <a role="button" class="outline"
+     href="/partner?status={{.Status}}&cursor={{.NextCursor}}">Дальше</a>
+  {{end}}
+</div>
 {{end}}
 {{end}}
 

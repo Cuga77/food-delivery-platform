@@ -92,6 +92,7 @@ func New(cfg Config) (*Handler, error) {
 // с именами файлов не совпадают, поэтому промах даёт явную ошибку.
 const (
 	pageRestaurants  = "page:restaurants"
+	pageMyOrders     = "page:my-orders"
 	pageMenu         = "page:menu"
 	pageOrder        = "page:order"
 	pageError        = "page:error"
@@ -99,15 +100,17 @@ const (
 	pagePartnerPanel = "page:partner-panel"
 
 	partialRestaurantCards = "partial:restaurant-cards"
+	partialMyOrderRows     = "partial:my-order-rows"
 	partialOrderDetail     = "partial:order-detail"
 	partialPartnerOrders   = "partial:partner-orders"
 )
 
 func assertTemplatesDefined(tmpl *template.Template) error {
 	required := []string{
-		pageRestaurants, pageMenu, pageOrder, pageError,
+		pageRestaurants, pageMyOrders, pageMenu, pageOrder, pageError,
 		pagePartnerLogin, pagePartnerPanel,
-		partialRestaurantCards, partialOrderDetail, partialPartnerOrders,
+		partialRestaurantCards, partialMyOrderRows,
+		partialOrderDetail, partialPartnerOrders,
 	}
 
 	for _, name := range required {
@@ -130,6 +133,7 @@ func (h *Handler) Mount(r chi.Router) {
 
 	// --- Клиент ---
 	r.Get("/restaurants", h.restaurantsPage)
+	r.Get(myOrdersPath, h.myOrdersPage)
 	r.Get("/restaurants/{slug}", h.menuPage)
 	r.Post("/orders", h.createOrder)
 	r.Get("/orders/{public_number}", h.orderPage)

@@ -429,7 +429,57 @@ expect_status 404 "GET несуществующего заказа"
 expect_code "ORDER_NOT_FOUND" "  причина отказа"
 
 # ---------------------------------------------------------------------------
-# 11. Поздняя отмена
+# 11. История заказов пользователя
+# ---------------------------------------------------------------------------
+
+step "История заказов пользователя: своё видно, чужое — нет"
+
+request GET "$API/api/v1/orders?user_external_id=usr_smoke&limit=1"
+expect_status 200 "GET /api/v1/orders"
+
+HISTORY_LEN=$(body | jq -r '.items | length')
+HISTORY_FIRST=$(body | jq -r '.items[0].public_number // ""')
+HISTORY_CURSOR=$(body | jq -r '.next_cursor // ""')
+
+if [[ "$HISTORY_FIRST" == "$ORDER_NUMBER" ]]; then
+  ok "свежий заказ первый в истории"
+else
+  fail "ожидался заказ $ORDER_NUMBER первым, получено «$HISTORY_FIRST» ($HISTORY_LEN шт.)"
+fi
+
+# limit=1 при нескольких заказах обязан вернуть курсор, и вторая страница не
+# должна повторять первую: это и есть проверка границы keyset-пагинации.
+if [[ -n "$HISTORY_CURSOR" ]]; then
+  request GET "$API/api/v1/orders?user_external_id=usr_smoke&limit=1&cursor=$HISTORY_CURSOR"
+  expect_status 200 "GET /api/v1/orders со следующим курсором"
+
+  HISTORY_SECOND=$(body | jq -r '.items[0].public_number // ""')
+  if [[ -n "$HISTORY_SECOND" && "$HISTORY_SECOND" != "$HISTORY_FIRST" ]]; then
+    ok "следующая страница отдала другой заказ — границы не пересекаются"
+  else
+    fail "вторая страница повторила первую: $HISTORY_SECOND"
+  fi
+else
+  info "заказ у пользователя один — следующей страницы нет"
+fi
+
+# Чужая история не отдаётся: выборка идёт строго по user_external_id.
+request GET "$API/api/v1/orders?user_external_id=usr_nobody"
+expect_status 200 "GET /api/v1/orders для другого пользователя"
+
+FOREIGN_LEN=$(body | jq -r '.items | length')
+if [[ "$FOREIGN_LEN" == "0" ]]; then
+  ok "история другого пользователя пуста"
+else
+  fail "чужому пользователю видно $FOREIGN_LEN заказов"
+fi
+
+# Испорченный курсор — понятный отказ, а не пятисотка.
+request GET "$API/api/v1/orders?user_external_id=usr_smoke&cursor=notacursor"
+expect_status 400 "GET /api/v1/orders с испорченным курсором"
+
+# ---------------------------------------------------------------------------
+# 12. Поздняя отмена
 # ---------------------------------------------------------------------------
 
 step "Отмена заказа в статусе READY → 409 ORDER_CANNOT_BE_CANCELLED"
@@ -468,7 +518,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 12. Закрытие кухни
+# 13. Закрытие кухни
 # ---------------------------------------------------------------------------
 
 step "Закрытие кухни → новые заказы отклоняются"
