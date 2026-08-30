@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -1200,4 +1201,84 @@ func TestOrderRepo_ListByRestaurant_UsesIndex(t *testing.T) {
 		"выборка очереди должна опираться на индекс, план: %s", plan)
 	assert.NotContains(t, plan, "Seq Scan on orders",
 		"полное сканирование заказов недопустимо, план: %s", plan)
+}
+
+// Окончательный отказ заведения снимается с доставки сразу, без десяти
+// попыток с нарастающим backoff: ответ 400 не изменится ни через секунду,
+// ни через час, а попытки лишь оттянут разбор инцидента на часы.
+func TestOutboxWorker_PermanentRejectionIsNotRetried(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+	env.seedMenu(t, restaurant.ID, pizzaMenu())
+
+	order, err := env.orderService.Create(ctx, newOrderDraft(restaurant.ID,
+		domain.DraftItem{ProductKey: "pizza_margherita", Qty: 1},
+	))
+	require.NoError(t, err)
+
+	var eventID int64
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT id FROM outbox_events WHERE aggregate_id = $1`,
+		order.PublicNumber.String()).Scan(&eventID))
+
+	deliverer := &rejectingDeliverer{}
+	cfg := app.DefaultOutboxConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+	worker := app.NewOutboxWorker(env.outbox, env.restaurants, deliverer, cfg, discardLogger())
+
+	runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, worker.Run(runCtx))
+	}()
+
+	require.Eventually(t, func() bool {
+		var deadAt *time.Time
+		err := testPool.QueryRow(ctx,
+			`SELECT dead_at FROM outbox_events WHERE id = $1`, eventID).Scan(&deadAt)
+		return err == nil && deadAt != nil
+	}, 3*time.Second, 20*time.Millisecond, "событие должно быть снято с доставки")
+
+	cancel()
+	<-done
+
+	var attempts int32
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT attempts FROM outbox_events WHERE id = $1`, eventID).Scan(&attempts))
+
+	assert.Equal(t, int32(1), attempts,
+		"ровно одна попытка: повторять окончательный отказ бессмысленно")
+	assert.Equal(t, 1, deliverer.callsFor(order.PublicNumber.String()),
+		"воркер не стучался повторно по нашему заказу")
+}
+
+// rejectingDeliverer изображает заведение, отвергающее событие по существу.
+//
+// Счётчик ведётся по агрегатам, а не общий: в базе остаются недоставленные
+// события соседних тестов, и воркер честно берёт в работу их тоже.
+type rejectingDeliverer struct {
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (d *rejectingDeliverer) Deliver(_ context.Context, _ string, event app.DeliveryEvent) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.calls == nil {
+		d.calls = map[string]int{}
+	}
+	d.calls[event.AggregateID]++
+
+	return fmt.Errorf("%w: HTTP 400", app.ErrDeliveryRejected)
+}
+
+func (d *rejectingDeliverer) callsFor(aggregateID string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls[aggregateID]
 }

@@ -163,6 +163,15 @@ func (w *OutboxWorker) deliver(ctx context.Context, event OutboxEvent) {
 		CreatedAt:   event.CreatedAt,
 	})
 	if deliveryErr != nil {
+		// Окончательный отказ не имеет смысла повторять: ответ не изменится, а
+		// попытки только оттянут разбор инцидента.
+		if errors.Is(deliveryErr, ErrDeliveryRejected) {
+			log.ErrorContext(ctx, "заведение отвергло событие, повторять не будем",
+				slog.Any("error", deliveryErr))
+			w.markDead(ctx, event, deliveryErr.Error())
+			return
+		}
+
 		w.retry(ctx, event, deliveryErr)
 		return
 	}

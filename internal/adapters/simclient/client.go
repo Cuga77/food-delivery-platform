@@ -55,9 +55,17 @@ type envelope struct {
 
 // Deliver отправляет событие на POST {baseURL}/kitchen/events.
 //
-// Успехом считается любой 2xx. Ответ 4xx означает, что заведение считает
-// событие некорректным — повторять его бессмысленно, поэтому ошибка помечается
-// так, чтобы воркер не крутил бесконечные попытки.
+// Успехом считается любой 2xx. Остальные ответы делятся на два класса, и это
+// деление существенно: воркер повторяет временные сбои с нарастающей задержкой,
+// а окончательные отказы снимает с доставки сразу.
+//
+//	5xx, таймаут, отказ соединения  — временный сбой, повторяем;
+//	408, 425, 429                   — заведение само просит повторить позже;
+//	прочие 4xx                      — окончательный отказ (ErrDeliveryRejected).
+//
+// Смысл в том, что ответ 400 «не понимаю такое событие» не изменится ни через
+// секунду, ни через час: десять попыток с backoff лишь оттянут разбор на часы
+// и всё равно кончатся ничем.
 func (c *Client) Deliver(ctx context.Context, baseURL string, event app.DeliveryEvent) error {
 	body, err := json.Marshal(envelope{
 		EventID:     event.EventID,
@@ -94,5 +102,27 @@ func (c *Client) Deliver(ctx context.Context, baseURL string, event app.Delivery
 		return nil
 	}
 
-	return fmt.Errorf("заведение ответило %d на %s", resp.StatusCode, endpoint)
+	if isPermanentRejection(resp.StatusCode) {
+		return fmt.Errorf("%w: HTTP %d на %s", app.ErrDeliveryRejected, resp.StatusCode, endpoint)
+	}
+
+	return domain.WrapErrorf(
+		fmt.Errorf("заведение ответило %d на %s", resp.StatusCode, endpoint),
+		domain.CodeServiceUnavailable, "временный сбой доставки события")
+}
+
+// isPermanentRejection сообщает, что ответ не изменится от повтора.
+func isPermanentRejection(status int) bool {
+	if status < 400 || status >= 500 {
+		return false
+	}
+
+	switch status {
+	case http.StatusRequestTimeout, // 408 — заведение не успело, но готово принять
+		http.StatusTooEarly,        // 425
+		http.StatusTooManyRequests: // 429 — просит сбавить темп, а не отвергает
+		return false
+	default:
+		return true
+	}
 }

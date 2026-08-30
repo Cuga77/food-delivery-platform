@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -164,6 +165,16 @@ type DeliveryEvent struct {
 	Payload     json.RawMessage
 	CreatedAt   time.Time
 }
+
+// ErrDeliveryRejected означает, что заведение отвергло событие по существу, а
+// не из-за временного сбоя: неверный формат, неизвестный тип, отозванный
+// доступ. Повторять такое бессмысленно — ответ не изменится ни через секунду,
+// ни через час, а десять попыток с нарастающим backoff лишь оттянут разбор
+// инцидента на часы.
+//
+// Реализация EventDeliverer оборачивает этой ошибкой те ответы, которые
+// считает окончательными; воркер снимает такое событие с доставки сразу.
+var ErrDeliveryRejected = errors.New("заведение отвергло событие")
 
 // EventDeliverer доставляет событие в сервис заведения. Реализация —
 // internal/adapters/simclient.
