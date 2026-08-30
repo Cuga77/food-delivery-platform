@@ -118,6 +118,20 @@ func toAPIOrder(order domain.Order) gen.Order {
 	}
 }
 
+// toAPIOrderPage переводит страницу заказов в модель контракта.
+//
+// OrderPage и PartnerOrderList — разные типы генератора с одинаковым набором
+// полей, поэтому маппер собирает общую часть, а вызывающий укладывает её в
+// нужную обёртку.
+func toAPIOrderPage(page app.OrderPage) (items []gen.Order, nextCursor *string) {
+	items = toAPIOrders(page.Items)
+	if page.NextCursor != "" {
+		cursor := page.NextCursor
+		nextCursor = &cursor
+	}
+	return items, nextCursor
+}
+
 func toAPIOrders(orders []domain.Order) []gen.Order {
 	result := make([]gen.Order, 0, len(orders))
 	for i := range orders {

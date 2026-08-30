@@ -60,7 +60,18 @@ type OrderFilter struct {
 	RestaurantID int64
 	// Status == nil означает «все статусы».
 	Status *domain.OrderStatus
-	Limit  int32
+	// After — позиция последней записи предыдущей страницы; нулевое значение
+	// означает первую страницу.
+	After OrderCursor
+	Limit int32
+}
+
+// UserOrderFilter — параметры выборки истории заказов пользователя.
+type UserOrderFilter struct {
+	UserExternalID string
+	// After — позиция последней записи предыдущей страницы.
+	After OrderCursor
+	Limit int32
 }
 
 // StatusUpdate — параметры перевода заказа в новый статус под оптимистичной
@@ -83,8 +94,10 @@ type OrderRepo interface {
 	Create(ctx context.Context, order *domain.Order) error
 	// GetByPublicNumber отдаёт заказ вместе с позициями и таймлайном.
 	GetByPublicNumber(ctx context.Context, publicNumber uuid.UUID) (domain.Order, error)
-	// ListByRestaurant отдаёт очередь заказов заведения (без таймлайна).
+	// ListByRestaurant отдаёт очередь заказов заведения, свежие первыми.
 	ListByRestaurant(ctx context.Context, filter OrderFilter) ([]domain.Order, error)
+	// ListByUser отдаёт историю заказов пользователя, свежие первыми.
+	ListByUser(ctx context.Context, filter UserOrderFilter) ([]domain.Order, error)
 	// ApplyStatus обновляет статус под оптимистичной блокировкой и пишет
 	// событие в историю. При расхождении версий возвращает STATE_CONFLICT.
 	ApplyStatus(ctx context.Context, upd StatusUpdate) error

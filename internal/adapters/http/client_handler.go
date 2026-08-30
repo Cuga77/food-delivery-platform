@@ -49,6 +49,30 @@ func (h *ClientHandler) ListRestaurants(
 	return gen.ListRestaurants200JSONResponse(toAPIRestaurantPage(page)), nil
 }
 
+// ListOrders — GET /api/v1/orders.
+func (h *ClientHandler) ListOrders(
+	ctx context.Context,
+	request gen.ListOrdersRequestObject,
+) (gen.ListOrdersResponseObject, error) {
+	query := app.ListUserOrdersQuery{UserExternalID: request.Params.UserExternalId}
+
+	if request.Params.Limit != nil {
+		query.Limit = *request.Params.Limit
+	}
+	if request.Params.Cursor != nil {
+		query.Cursor = *request.Params.Cursor
+	}
+
+	page, err := h.orders.ListByUser(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	items, nextCursor := toAPIOrderPage(page)
+
+	return gen.ListOrders200JSONResponse{Items: items, NextCursor: nextCursor}, nil
+}
+
 // GetRestaurantMenu — GET /api/v1/restaurants/{slug}/menu.
 func (h *ClientHandler) GetRestaurantMenu(
 	ctx context.Context,

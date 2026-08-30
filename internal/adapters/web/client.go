@@ -22,6 +22,9 @@ import (
 
 const restaurantsPageSize = 20
 
+// myOrdersPath — история заказов текущего браузера.
+const myOrdersPath = "/orders"
+
 // --- Каталог ----------------------------------------------------------------
 
 type restaurantsPageData struct {
@@ -80,6 +83,17 @@ func (h *Handler) menuPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Личность посетителя выдаётся здесь, вместе с формой заказа, а не при её
+	// отправке. Иначе двойной клик по кнопке «оформить» — тот самый сценарий,
+	// ради которого существует идемпотентность, — приходил бы двумя запросами
+	// без cookie, каждый получал бы собственный случайный идентификатор, и
+	// вместо повтора посетитель видел бы ошибку расхождения содержимого.
+	if _, err := h.visitorID(w, r); err != nil {
+		h.renderError(w, r, domain.Errorf(domain.CodeInternalError,
+			"не удалось начать сессию — попробуйте ещё раз"), backToRestaurants)
+		return
+	}
+
 	h.render(w, r, http.StatusOK, pageMenu, menuPageData{
 		Title:          menu.Restaurant.Name,
 		Restaurant:     menu.Restaurant,
@@ -118,8 +132,15 @@ func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 		back = backToRestaurants
 	}
 
+	visitor, err := h.visitorID(w, r)
+	if err != nil {
+		h.renderError(w, r, domain.Errorf(domain.CodeInternalError,
+			"не удалось начать сессию — попробуйте ещё раз"), back)
+		return
+	}
+
 	draft := domain.OrderDraft{
-		UserExternalID:  webUserID(r),
+		UserExternalID:  visitor,
 		RestaurantID:    restaurantID,
 		DeliveryAddress: strings.TrimSpace(r.PostFormValue("delivery_address")),
 		Items:           cartFromForm(r),
@@ -241,15 +262,6 @@ func safeReturnPath(raw string) string {
 	return parsed.String()
 }
 
-// webUserID возвращает идентификатор пользователя.
-//
-// Аутентификация пользователей в MVP не реализуется (см. README), поэтому
-// веб-клиент работает от лица условного посетителя. Значение из формы не
-// принимается: иначе один посетитель мог бы читать историю другого.
-func webUserID(_ *http.Request) string {
-	return "web_guest"
-}
-
 // --- Идемпотентность формы заказа -------------------------------------------
 
 // webIdempotencyPrefix отделяет ключи веб-форм от ключей JSON API: это разные
@@ -351,8 +363,13 @@ func (h *Handler) releaseOrderForm(ctx context.Context, key string) {
 func draftHash(draft domain.OrderDraft) string {
 	sum := sha256.New()
 
-	sum.Write([]byte(draft.UserExternalID))
-	sum.Write([]byte{0})
+	// Идентификатор посетителя в хэш намеренно не входит: хэш отвечает на
+	// вопрос «это та же самая отправка формы?», а личность частью формы не
+	// является. Если браузер запретил cookie, повторная отправка приходит с
+	// новым случайным идентификатором — и, войди он в хэш, посетитель вместо
+	// повтора получил бы ошибку расхождения содержимого. Разделение с ключами
+	// JSON API обеспечено префиксом пространства имён, а не хэшем; сам ключ
+	// выдаётся при рендере меню и живёт внутри одной сессии оформления.
 	sum.Write([]byte(strconv.FormatInt(draft.RestaurantID, 10)))
 	sum.Write([]byte{0})
 	sum.Write([]byte(draft.DeliveryAddress))
@@ -365,6 +382,59 @@ func draftHash(draft domain.OrderDraft) string {
 	}
 
 	return hex.EncodeToString(sum.Sum(nil))
+}
+
+// --- История заказов --------------------------------------------------------
+
+// userOrdersPageSize — размер страницы истории.
+const userOrdersPageSize = 20
+
+type myOrdersPageData struct {
+	Title      string
+	Orders     []domain.Order
+	NextCursor string
+	// KnownVisitor == false означает, что браузер ещё ничего не заказывал:
+	// пустой список тогда нужно объяснить, а не показать как «заказов нет».
+	KnownVisitor bool
+}
+
+// myOrdersPage — история заказов текущего браузера.
+//
+// Идентификатор берётся из cookie и никогда из запроса: приняв его из query,
+// страница превратилась бы в чтение чужой истории по подставленному значению.
+// Новая личность здесь не выдаётся — посетителю, который ещё ничего не
+// заказывал, показывать нечего, и заводить ради этого cookie не нужно.
+func (h *Handler) myOrdersPage(w http.ResponseWriter, r *http.Request) {
+	visitor := currentVisitorID(r)
+	if visitor == "" {
+		h.render(w, r, http.StatusOK, pageMyOrders, myOrdersPageData{
+			Title: "Мои заказы",
+		})
+		return
+	}
+
+	page, err := h.orders.ListByUser(r.Context(), app.ListUserOrdersQuery{
+		UserExternalID: visitor,
+		Limit:          userOrdersPageSize,
+		Cursor:         r.URL.Query().Get("cursor"),
+	})
+	if err != nil {
+		h.renderError(w, r, err, backLink{URL: myOrdersPath, Label: "Обновить"})
+		return
+	}
+
+	data := myOrdersPageData{
+		Title:        "Мои заказы",
+		Orders:       page.Items,
+		NextCursor:   page.NextCursor,
+		KnownVisitor: true,
+	}
+
+	if isHTMX(r) {
+		h.render(w, r, http.StatusOK, partialMyOrderRows, data)
+		return
+	}
+	h.render(w, r, http.StatusOK, pageMyOrders, data)
 }
 
 // --- Карточка заказа --------------------------------------------------------

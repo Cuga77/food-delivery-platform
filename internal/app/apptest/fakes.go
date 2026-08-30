@@ -390,24 +390,59 @@ func (o *fakeOrderRepo) GetByPublicNumber(_ context.Context, number uuid.UUID) (
 }
 
 func (o *fakeOrderRepo) ListByRestaurant(_ context.Context, filter app.OrderFilter) ([]domain.Order, error) {
+	return o.page(filter.After, filter.Limit, func(order domain.Order) bool {
+		if order.RestaurantID != filter.RestaurantID {
+			return false
+		}
+		return filter.Status == nil || order.Status == *filter.Status
+	}), nil
+}
+
+func (o *fakeOrderRepo) ListByUser(_ context.Context, filter app.UserOrderFilter) ([]domain.Order, error) {
+	return o.page(filter.After, filter.Limit, func(order domain.Order) bool {
+		return order.UserExternalID == filter.UserExternalID
+	}), nil
+}
+
+// page воспроизводит выборку настоящего репозитория: порядок
+// (created_at DESC, id DESC), граница страницы по курсору, обрезка по лимиту.
+// Порядок и семантика курсора здесь должны совпадать с SQL, иначе тесты
+// пагинации проверяли бы поведение фейка, а не сервиса.
+func (o *fakeOrderRepo) page(
+	after app.OrderCursor,
+	limit int32,
+	keep func(domain.Order) bool,
+) []domain.Order {
 	out := make([]domain.Order, 0)
 	for _, order := range (*o.state).Orders {
-		if order.RestaurantID != filter.RestaurantID {
+		if !keep(order) {
 			continue
 		}
-		if filter.Status != nil && order.Status != *filter.Status {
+		if !after.IsZero() && !beforeCursor(order, after) {
 			continue
 		}
 		out = append(out, order)
 	}
 
-	// Стабильный порядок: свежие сверху, как в настоящем репозитории.
-	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
 
-	if filter.Limit > 0 && int32(len(out)) > filter.Limit {
-		out = out[:filter.Limit]
+	if limit > 0 && int32(len(out)) > limit {
+		out = out[:limit]
 	}
-	return out, nil
+	return out
+}
+
+// beforeCursor — аналог SQL-условия (created_at, id) < (cursor.created_at, cursor.id).
+func beforeCursor(order domain.Order, after app.OrderCursor) bool {
+	if !order.CreatedAt.Equal(after.CreatedAt) {
+		return order.CreatedAt.Before(after.CreatedAt)
+	}
+	return order.ID < after.ID
 }
 
 func (o *fakeOrderRepo) ApplyStatus(_ context.Context, upd app.StatusUpdate) error {

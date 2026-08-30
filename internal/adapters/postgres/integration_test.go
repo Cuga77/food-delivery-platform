@@ -605,17 +605,22 @@ func TestPartnerService_ListOrders_FiltersByRestaurantAndStatus(t *testing.T) {
 		domain.DraftItem{ProductKey: "pizza_margherita", Qty: 1}))
 	require.NoError(t, err)
 
-	queue, err := env.partnerService.ListOrders(ctx, mine.ID, nil, 50)
+	queue, err := env.partnerService.ListOrders(ctx, app.ListOrdersQuery{
+		RestaurantID: mine.ID, Limit: 50,
+	})
 	require.NoError(t, err)
-	require.Len(t, queue, 1)
-	assert.Equal(t, own.PublicNumber, queue[0].PublicNumber)
-	assert.NotEmpty(t, queue[0].Items, "в очереди видны позиции заказа")
-	assert.NotEmpty(t, queue[0].Timeline)
+	require.Len(t, queue.Items, 1)
+	assert.Equal(t, own.PublicNumber, queue.Items[0].PublicNumber)
+	assert.NotEmpty(t, queue.Items[0].Items, "в очереди видны позиции заказа")
+	assert.NotEmpty(t, queue.Items[0].Timeline)
+	assert.Empty(t, queue.NextCursor, "заказ один — следующей страницы нет")
 
 	ready := domain.StatusReady
-	empty, err := env.partnerService.ListOrders(ctx, mine.ID, &ready, 50)
+	empty, err := env.partnerService.ListOrders(ctx, app.ListOrdersQuery{
+		RestaurantID: mine.ID, Status: &ready, Limit: 50,
+	})
 	require.NoError(t, err)
-	assert.Empty(t, empty)
+	assert.Empty(t, empty.Items)
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,6 +1227,281 @@ func TestOrderRepo_ListByRestaurant_UsesIndex(t *testing.T) {
 		"выборка очереди должна опираться на индекс, план: %s", plan)
 	assert.NotContains(t, plan, "Seq Scan on orders",
 		"полное сканирование заказов недопустимо, план: %s", plan)
+}
+
+// Индекс под историю заказов пользователя должен существовать после миграций,
+// а прежний — быть удалён: (user_external_id, created_at) без id в ключе не
+// годится для курсорной пагинации, а выборки по пользователю до появления
+// GET /api/v1/orders не существовало вовсе.
+func TestMigrations_UserOrdersIndex(t *testing.T) {
+	ctx := context.Background()
+
+	var hasNew, hasOld bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes
+		                WHERE tablename='orders' AND indexname='idx_orders_user_recent')`).Scan(&hasNew))
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_indexes
+		                WHERE tablename='orders' AND indexname='idx_orders_user_created')`).Scan(&hasOld))
+
+	assert.True(t, hasNew, "индекс истории заказов создан")
+	assert.False(t, hasOld, "прежний индекс (user_external_id, created_at) удалён")
+}
+
+// seedUserOrders вставляет заказы пользователя напрямую, минуя сценарий
+// оформления: тестам пагинации нужно много строк и полный контроль над
+// created_at, а не проверка бизнес-правил.
+func seedUserOrders(
+	ctx context.Context,
+	t *testing.T,
+	restaurantID int64,
+	user string,
+	count int,
+	sameInstant bool,
+) {
+	t.Helper()
+
+	// sameInstant задаёт всем заказам одно и то же время создания — ровно тот
+	// случай, ради которого id входит в ключ пагинации.
+	offset := "(g || ' seconds')::interval"
+	if sameInstant {
+		offset = "'0 seconds'::interval"
+	}
+
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO orders (public_number, user_external_id, restaurant_id, status,
+		                    delivery_address, subtotal_kopecks, delivery_fee_kopecks,
+		                    total_kopecks, created_at)
+		SELECT gen_random_uuid(), $2, $1, 'NEW', 'ул. Ленина, 10',
+		       60000, 0, 60000, NOW() - `+offset+`
+		FROM generate_series(1, $3) g`, restaurantID, user, count)
+	require.NoError(t, err)
+}
+
+// История заказов обязана читаться по индексу: без него выборка по
+// user_external_id вырождалась бы в полное сканирование заказов всей площадки.
+func TestOrderRepo_ListByUser_UsesIndex(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	user := unique("usr")
+	seedUserOrders(ctx, t, restaurant.ID, user, 5000, false)
+	_, err := testPool.Exec(ctx, `ANALYZE orders`)
+	require.NoError(t, err)
+
+	plan := explain(t, `
+		SELECT o.id FROM orders o
+		JOIN restaurants r ON r.id = o.restaurant_id
+		WHERE o.user_external_id = $1
+		ORDER BY o.created_at DESC, o.id DESC LIMIT 20`, user)
+
+	assert.Contains(t, plan, "idx_orders_user_recent",
+		"история заказов должна опираться на индекс, план: %s", plan)
+	assert.NotContains(t, plan, "Seq Scan on orders",
+		"полное сканирование заказов недопустимо, план: %s", plan)
+	assert.NotContains(t, plan, "Sort Key",
+		"порядок индекса совпадает с ORDER BY, сортировки быть не должно, план: %s", plan)
+}
+
+// Курсор обязан быть границей индексного поиска, а не фильтром поверх прохода
+// от начала диапазона: во втором случае стоимость страницы растёт с её
+// глубиной, то есть keyset вырождается в OFFSET.
+//
+// Проверка идёт на обобщённом плане намеренно. При индивидуальном плане
+// значения параметров планировщику известны, и в Index Cond попадает даже
+// отвергнутая форма `($n IS NULL OR ...)` — тест на ней прошёл бы и ничего не
+// доказал. Разница между формами проявляется ровно там, где параметры
+// неизвестны, а туда PostgreSQL вправе перейти сам после нескольких
+// выполнений подготовленного выражения, которые pgx кэширует по умолчанию.
+func TestOrderRepo_ListByUser_CursorIsIndexCondition(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	user := unique("usr")
+	seedUserOrders(ctx, t, restaurant.ID, user, 5000, false)
+	_, err := testPool.Exec(ctx, `ANALYZE orders`)
+	require.NoError(t, err)
+
+	conn, err := testPool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, `SET plan_cache_mode = force_generic_plan`)
+	require.NoError(t, err)
+
+	// Тот же предикат, что подставляет keysetPredicate в order_repo.go.
+	_, err = conn.Exec(ctx, `
+		PREPARE keyset_page (text, timestamptz, bigint) AS
+		SELECT o.id FROM orders o
+		WHERE o.user_external_id = $1
+		  AND (o.created_at, o.id) < ($2::timestamptz, $3::bigint)
+		ORDER BY o.created_at DESC, o.id DESC LIMIT 20`)
+	require.NoError(t, err)
+
+	// EXECUTE не принимает параметров запроса, поэтому идентификатор
+	// подставляется в текст. Он сгенерирован здесь же функцией unique и состоит
+	// из букв, цифр и дефисов — внешних данных в запросе нет.
+	rows, err := conn.Query(ctx, `
+		EXPLAIN (FORMAT TEXT)
+		EXECUTE keyset_page('`+user+`', NOW(), 9223372036854775807)`)
+	require.NoError(t, err)
+
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	rows.Close()
+	require.NoError(t, rows.Err())
+	plan := strings.Join(lines, "\n")
+
+	assert.Contains(t, indexCondOf(plan), "created_at",
+		"курсор должен войти в Index Cond, план: %s", plan)
+	assert.NotContains(t, plan, "Filter: ",
+		"курсор не должен опускаться в фильтр, план: %s", plan)
+	assert.NotContains(t, plan, "Seq Scan on orders", "план: %s", plan)
+}
+
+// indexCondOf вырезает из плана строки Index Cond: именно там условие работает
+// границей поиска, тогда как Filter означает проверку уже прочитанных строк.
+func indexCondOf(plan string) string {
+	var conds []string
+	for _, line := range strings.Split(plan, "\n") {
+		if strings.Contains(line, "Index Cond:") {
+			conds = append(conds, line)
+		}
+	}
+	return strings.Join(conds, "\n")
+}
+
+// explain собирает план целиком: QueryRow вернул бы только верхний узел, и
+// проверка стала бы бессмысленной.
+func explain(t *testing.T, query string, args ...any) string {
+	t.Helper()
+
+	rows, err := testPool.Query(context.Background(), "EXPLAIN (FORMAT TEXT) "+query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var lines []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		lines = append(lines, line)
+	}
+	require.NoError(t, rows.Err())
+
+	return strings.Join(lines, "\n")
+}
+
+// Обход истории курсором не должен ни пропускать заказы, ни показывать их
+// дважды — в том числе когда у всех заказов совпадает created_at. Ровно ради
+// этого случая в ключ пагинации входит id: одного времени недостаточно.
+func TestOrderRepo_ListByUser_CursorWalksHistoryExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	for _, tc := range []struct {
+		name        string
+		sameInstant bool
+	}{
+		{"разное время создания", false},
+		{"одинаковое время создания", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := unique("usr")
+			const total = 25
+			seedUserOrders(ctx, t, restaurant.ID, user, total, tc.sameInstant)
+
+			seen := make(map[int64]int)
+			cursor := app.OrderCursor{}
+			pages := 0
+
+			for {
+				page, err := env.orders.ListByUser(ctx, app.UserOrderFilter{
+					UserExternalID: user,
+					After:          cursor,
+					Limit:          7,
+				})
+				require.NoError(t, err)
+
+				for _, order := range page {
+					seen[order.ID]++
+				}
+
+				pages++
+				require.Less(t, pages, total+2, "обход не сходится")
+
+				if len(page) < 7 {
+					break
+				}
+				last := page[len(page)-1]
+				cursor = app.OrderCursor{CreatedAt: last.CreatedAt, ID: last.ID}
+			}
+
+			assert.Len(t, seen, total, "прочитаны все заказы")
+			for id, times := range seen {
+				assert.Equalf(t, 1, times, "заказ %d прочитан %d раз", id, times)
+			}
+		})
+	}
+}
+
+// Чужая история не отдаётся: выборка идёт строго по user_external_id.
+func TestOrderRepo_ListByUser_IsolatesUsers(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	mine, other := unique("usr"), unique("usr")
+	seedUserOrders(ctx, t, restaurant.ID, mine, 3, false)
+	seedUserOrders(ctx, t, restaurant.ID, other, 4, false)
+
+	page, err := env.orders.ListByUser(ctx, app.UserOrderFilter{
+		UserExternalID: mine,
+		Limit:          50,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, page, 3)
+	for _, order := range page {
+		assert.Equal(t, mine, order.UserExternalID)
+	}
+}
+
+// Очередь заведения обходится курсором так же: страницы не пересекаются.
+func TestOrderRepo_ListByRestaurant_CursorPaginates(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
+
+	seedUserOrders(ctx, t, restaurant.ID, unique("usr"), 10, true)
+
+	first, err := env.orders.ListByRestaurant(ctx, app.OrderFilter{
+		RestaurantID: restaurant.ID,
+		Limit:        4,
+	})
+	require.NoError(t, err)
+	require.Len(t, first, 4)
+
+	last := first[len(first)-1]
+	second, err := env.orders.ListByRestaurant(ctx, app.OrderFilter{
+		RestaurantID: restaurant.ID,
+		After:        app.OrderCursor{CreatedAt: last.CreatedAt, ID: last.ID},
+		Limit:        4,
+	})
+	require.NoError(t, err)
+	require.Len(t, second, 4)
+
+	for _, a := range first {
+		for _, b := range second {
+			assert.NotEqual(t, a.ID, b.ID, "страницы не пересекаются")
+		}
+	}
 }
 
 // Окончательный отказ заведения снимается с доставки сразу, без десяти

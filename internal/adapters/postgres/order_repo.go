@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,19 +151,40 @@ func (r *OrderRepo) GetByPublicNumber(ctx context.Context, publicNumber uuid.UUI
 	return order, nil
 }
 
+// keysetPredicate — граница страницы при keyset-пагинации по (created_at, id).
+//
+// Предикат подставляется в запрос только когда курсор задан, а не остаётся в
+// нём всегда под `($n::timestamptz IS NULL OR ...)`, как это сделано для
+// фильтра по статусу. Причина измерена на 20 000 заказов одного пользователя
+// (PostgreSQL 17.5):
+//
+//   - пока планировщик строит индивидуальный план, значения параметров ему
+//     известны, `$n IS NULL` сворачивается в false, и обе формы дают
+//     одинаковый Index Cond — разницы нет;
+//   - но pgx по умолчанию кэширует подготовленные выражения, а PostgreSQL
+//     после нескольких выполнений вправе перейти на обобщённый план, где
+//     значения параметров неизвестны и свернуть условие уже нельзя. Тогда
+//     форма с OR опускается в Filter: 4 буфера и 0,18 мс превращаются в 711
+//     буферов и 8,0 мс, из которых 18 999 строк отбрасываются фильтром.
+//
+// То есть обёртка не ломает план гарантированно — она делает его зависимым от
+// решения, которое принимается за пределами кода. Стоимость страницы при этом
+// снова растёт с её глубиной, то есть keyset вырождается в OFFSET. Отдельная
+// ветка запроса убирает эту зависимость: условие остаётся границей индексного
+// поиска при любом режиме планирования.
+const keysetPredicate = ` AND (o.created_at, o.id) < ($%d::timestamptz, $%d::bigint)`
+
 // ListByRestaurant отдаёт очередь заказов заведения, свежие сверху.
 //
 // Позиции и таймлайн догружаются двумя запросами на всю страницу, а не по
 // запросу на заказ: количество round-trip'ов остаётся постоянным (проблема N+1).
 func (r *OrderRepo) ListByRestaurant(ctx context.Context, filter app.OrderFilter) ([]domain.Order, error) {
-	const query = `
+	const head = `
 		SELECT ` + orderColumns + `
 		FROM orders o
 		JOIN restaurants r ON r.id = o.restaurant_id
 		WHERE o.restaurant_id = $1
-		  AND ($2::text IS NULL OR o.status = $2::text)
-		ORDER BY o.created_at DESC, o.id DESC
-		LIMIT $3`
+		  AND ($2::text IS NULL OR o.status = $2::text)`
 
 	var status *string
 	if filter.Status != nil {
@@ -170,24 +192,73 @@ func (r *OrderRepo) ListByRestaurant(ctx context.Context, filter app.OrderFilter
 		status = &s
 	}
 
-	rows, err := r.db(ctx).Query(ctx, query, filter.RestaurantID, status, filter.Limit)
+	query := head
+	args := []any{filter.RestaurantID, status}
+	if !filter.After.IsZero() {
+		query += fmt.Sprintf(keysetPredicate, len(args)+1, len(args)+2)
+		args = append(args, filter.After.CreatedAt, filter.After.ID)
+	}
+	query += fmt.Sprintf(`
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $%d`, len(args)+1)
+	args = append(args, filter.Limit)
+
+	return r.listOrders(ctx, query, args, filter.Limit, "очереди заказов")
+}
+
+// ListByUser отдаёт историю заказов пользователя, свежие сверху.
+//
+// Обслуживается индексом idx_orders_user_recent: порядок индекса совпадает с
+// ORDER BY, поэтому сортировки в плане нет, а курсор задаёт точку входа.
+func (r *OrderRepo) ListByUser(ctx context.Context, filter app.UserOrderFilter) ([]domain.Order, error) {
+	const head = `
+		SELECT ` + orderColumns + `
+		FROM orders o
+		JOIN restaurants r ON r.id = o.restaurant_id
+		WHERE o.user_external_id = $1`
+
+	query := head
+	args := []any{filter.UserExternalID}
+	if !filter.After.IsZero() {
+		query += fmt.Sprintf(keysetPredicate, len(args)+1, len(args)+2)
+		args = append(args, filter.After.CreatedAt, filter.After.ID)
+	}
+	query += fmt.Sprintf(`
+		ORDER BY o.created_at DESC, o.id DESC
+		LIMIT $%d`, len(args)+1)
+	args = append(args, filter.Limit)
+
+	return r.listOrders(ctx, query, args, filter.Limit, "истории заказов пользователя")
+}
+
+// listOrders выполняет постраничную выборку заказов и догружает позиции с
+// таймлайном на всю страницу разом. subject попадает в текст ошибок, чтобы по
+// логу было видно, какая именно выборка не удалась.
+func (r *OrderRepo) listOrders(
+	ctx context.Context,
+	query string,
+	args []any,
+	limit int32,
+	subject string,
+) ([]domain.Order, error) {
+	rows, err := r.db(ctx).Query(ctx, query, args...)
 	if err != nil {
-		return nil, wrapDBError(err, "выборка очереди заказов")
+		return nil, wrapDBError(err, "выборка "+subject)
 	}
 	defer rows.Close()
 
-	orders := make([]domain.Order, 0, filter.Limit)
-	ids := make([]int64, 0, filter.Limit)
+	orders := make([]domain.Order, 0, limit)
+	ids := make([]int64, 0, limit)
 	for rows.Next() {
 		order, err := scanOrder(rows)
 		if err != nil {
-			return nil, wrapDBError(err, "чтение строки очереди заказов")
+			return nil, wrapDBError(err, "чтение строки "+subject)
 		}
 		orders = append(orders, order)
 		ids = append(ids, order.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, wrapDBError(err, "обход очереди заказов")
+		return nil, wrapDBError(err, "обход "+subject)
 	}
 
 	if len(orders) == 0 {

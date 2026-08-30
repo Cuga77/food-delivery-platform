@@ -1,0 +1,69 @@
+{{define "page:my-orders"}}
+<!DOCTYPE html>
+<html lang="ru">
+<head>{{template "layout:head" .}}</head>
+<body>
+{{template "layout:header" .}}
+<main class="container">
+  <h1>Мои заказы</h1>
+
+  {{if .KnownVisitor}}
+  <p class="meta">
+    История привязана к этому браузеру. Аутентификации пользователей в MVP нет,
+    поэтому в другом браузере список будет свой.
+  </p>
+  {{end}}
+
+  <div id="my-orders">
+    {{template "partial:my-order-rows" .}}
+  </div>
+</main>
+{{template "layout:footer" .}}
+</body>
+</html>
+{{end}}
+
+{{/*
+  Фрагмент истории и кнопка подгрузки — та же схема, что в каталоге: кнопка
+  заменяет сама себя, строки дописываются перед ней. Без JavaScript кнопка
+  остаётся обычной ссылкой на следующую страницу.
+*/}}
+{{define "partial:my-order-rows"}}
+{{if .Orders}}
+<table>
+  <thead>
+    <tr><th>Заказ</th><th>Статус</th><th>Заведение</th><th>Сумма</th><th>Оформлен</th></tr>
+  </thead>
+  <tbody>
+    {{range .Orders}}
+    <tr>
+      <td><a href="/orders/{{.PublicNumber}}">{{shortID .PublicNumber.String}}</a></td>
+      <td><span class="badge badge-{{orderStatusColor .Status}}">{{orderStatusLabel .Status}}</span></td>
+      <td>{{.RestaurantSlug}}</td>
+      <td>{{money .TotalKopecks}}</td>
+      <td>{{.CreatedAt.Format "02.01 15:04"}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else if .KnownVisitor}}
+<div class="empty">Заказов пока нет</div>
+{{else}}
+<div class="empty">
+  Здесь появятся заказы, которые вы оформите в этом браузере.
+  <div style="margin-top:.75rem"><a role="button" href="/restaurants">Выбрать заведение</a></div>
+</div>
+{{end}}
+
+{{if .NextCursor}}
+<div style="text-align:center" id="load-more-orders">
+  <a role="button" class="outline"
+     href="/orders?cursor={{.NextCursor}}"
+     hx-get="/orders?cursor={{.NextCursor}}"
+     hx-target="#load-more-orders"
+     hx-swap="outerHTML">
+    Показать ещё
+  </a>
+</div>
+{{end}}
+{{end}}

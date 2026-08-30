@@ -142,22 +142,43 @@ func validateSyncProducts(products []domain.Product) error {
 	return nil
 }
 
-// ListOrders отдаёт очередь заказов заведения.
-func (s *PartnerService) ListOrders(
-	ctx context.Context,
-	restaurantID int64,
-	status *domain.OrderStatus,
-	limit int32,
-) ([]domain.Order, error) {
-	if status != nil && !status.Valid() {
-		return nil, domain.Errorf(domain.CodeBadRequest, "неизвестный статус заказа: %q", *status)
+// ListOrdersQuery — входные параметры очереди заказов заведения.
+type ListOrdersQuery struct {
+	RestaurantID int64
+	// Status == nil означает «все статусы».
+	Status *domain.OrderStatus
+	Limit  int32
+	Cursor string
+}
+
+// ListOrders отдаёт страницу очереди заказов заведения, свежие первыми.
+//
+// Пагинация курсорная: у заведения за день накапливаются сотни заказов, и
+// возможность увидеть только первую страницу сделала бы историю недоступной.
+func (s *PartnerService) ListOrders(ctx context.Context, q ListOrdersQuery) (OrderPage, error) {
+	if q.Status != nil && !q.Status.Valid() {
+		return OrderPage{}, domain.Errorf(domain.CodeBadRequest,
+			"неизвестный статус заказа: %q", *q.Status)
 	}
 
-	return s.orders.ListByRestaurant(ctx, OrderFilter{
-		RestaurantID: restaurantID,
-		Status:       status,
-		Limit:        normalizeLimit(limit, defaultPartnerOrdersLimit, maxPartnerOrdersLimit),
+	limit := normalizeLimit(q.Limit, defaultPartnerOrdersLimit, maxPartnerOrdersLimit)
+
+	after, err := DecodeOrderCursor(q.Cursor)
+	if err != nil {
+		return OrderPage{}, err
+	}
+
+	items, err := s.orders.ListByRestaurant(ctx, OrderFilter{
+		RestaurantID: q.RestaurantID,
+		Status:       q.Status,
+		After:        after,
+		Limit:        limit + 1,
 	})
+	if err != nil {
+		return OrderPage{}, err
+	}
+
+	return paginateOrders(items, limit), nil
 }
 
 // SetKitchenStatus переключает режим работы кухни.
