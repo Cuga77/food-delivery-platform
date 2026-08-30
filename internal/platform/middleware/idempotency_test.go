@@ -103,7 +103,7 @@ func (f *fakeIdempotency) record(key string) (app.IdempotencyRecord, bool) {
 
 // --- Обвязка ----------------------------------------------------------------
 
-func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // handler возвращает обработчик, отвечающий заданным статусом и телом,
 // и счётчик вызовов — по нему видно, дошёл ли повтор до бизнес-логики.
@@ -354,11 +354,17 @@ func TestIdempotency_BodyReachesHandlerIntact(t *testing.T) {
 	repo := newFakeIdempotency()
 	const payload = `{"user_external_id":"usr_1","items":[{"product_key":"p","qty":2}]}`
 
-	var seen string
+	// Утверждения внутри обработчика запрещены: он выполняется на другой
+	// горутине, и t.FailNow оттуда тест не остановит. Собираем наблюдаемое и
+	// проверяем после возврата.
+	var (
+		seen    string
+		readErr error
+	)
 	h := middleware.Idempotency(repo, time.Hour, discard())(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
+			readErr = err
 			seen = string(raw)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
@@ -366,6 +372,7 @@ func TestIdempotency_BodyReachesHandlerIntact(t *testing.T) {
 
 	post(t, h, testKey, payload)
 
+	require.NoError(t, readErr)
 	assert.JSONEq(t, payload, seen)
 }
 

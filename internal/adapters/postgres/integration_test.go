@@ -23,12 +23,18 @@ import (
 
 func pizzaMenu() []domain.Product {
 	return []domain.Product{
-		{ProductKey: "pizza_margherita", Category: "Пицца", Name: "Пицца Маргарита",
-			Description: "Томаты, моцарелла", PriceKopecks: 59000, Available: true, StockQty: ptrInt32(10)},
-		{ProductKey: "pasta_carbonara", Category: "Паста", Name: "Паста Карбонара",
-			PriceKopecks: 49000, Available: true},
-		{ProductKey: "dessert_tiramisu", Category: "Десерты", Name: "Тирамису",
-			PriceKopecks: 29000, Available: false, StockQty: ptrInt32(5)},
+		{
+			ProductKey: "pizza_margherita", Category: "Пицца", Name: "Пицца Маргарита",
+			Description: "Томаты, моцарелла", PriceKopecks: 59000, Available: true, StockQty: ptrInt32(10),
+		},
+		{
+			ProductKey: "pasta_carbonara", Category: "Паста", Name: "Паста Карбонара",
+			PriceKopecks: 49000, Available: true,
+		},
+		{
+			ProductKey: "dessert_tiramisu", Category: "Десерты", Name: "Тирамису",
+			PriceKopecks: 29000, Available: false, StockQty: ptrInt32(5),
+		},
 	}
 }
 
@@ -78,8 +84,10 @@ func TestMenuRepo_PublishVersion_ArchivesPrevious(t *testing.T) {
 	assert.Equal(t, int32(1), first.Menu.Version)
 
 	second := env.seedMenu(t, restaurant.ID, []domain.Product{
-		{ProductKey: "pizza_new", Category: "Пицца", Name: "Новинка",
-			PriceKopecks: 71000, Available: true},
+		{
+			ProductKey: "pizza_new", Category: "Пицца", Name: "Новинка",
+			PriceKopecks: 71000, Available: true,
+		},
 	})
 	assert.Equal(t, int32(2), second.Menu.Version)
 	assert.Len(t, second.Products, 1, "витрина показывает только новую версию")
@@ -110,7 +118,7 @@ func TestMenuRepo_PublishVersion_ConcurrentSyncsSerialize(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, syncs)
 
-	for i := 0; i < syncs; i++ {
+	for i := range syncs {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -120,7 +128,7 @@ func TestMenuRepo_PublishVersion_ConcurrentSyncsSerialize(t *testing.T) {
 	wg.Wait()
 
 	for i, err := range errs {
-		assert.NoErrorf(t, err, "синхронизация #%d", i)
+		require.NoErrorf(t, err, "синхронизация #%d", i)
 	}
 
 	snapshot, err := env.menus.GetPublished(context.Background(), restaurant.ID)
@@ -231,8 +239,10 @@ func TestOrderService_Create_ConcurrentStockRace(t *testing.T) {
 	)
 
 	snapshot := env.seedMenu(t, restaurant.ID, []domain.Product{
-		{ProductKey: "scarce", Category: "Дефицит", Name: "Дефицитная позиция",
-			PriceKopecks: 10000, Available: true, StockQty: ptrInt32(stock)},
+		{
+			ProductKey: "scarce", Category: "Дефицит", Name: "Дефицитная позиция",
+			PriceKopecks: 10000, Available: true, StockQty: ptrInt32(stock),
+		},
 	})
 	productID := env.productID(t, snapshot, "scarce")
 
@@ -245,7 +255,7 @@ func TestOrderService_Create_ConcurrentStockRace(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -293,10 +303,14 @@ func TestOrderService_Create_RollbackRestoresPartialDecrements(t *testing.T) {
 	restaurant, _ := env.seedRestaurant(t, domain.RestaurantOnline, 0, 0)
 
 	snapshot := env.seedMenu(t, restaurant.ID, []domain.Product{
-		{ProductKey: "plenty", Category: "Еда", Name: "Много", PriceKopecks: 10000,
-			Available: true, StockQty: ptrInt32(50)},
-		{ProductKey: "scarce", Category: "Еда", Name: "Мало", PriceKopecks: 10000,
-			Available: true, StockQty: ptrInt32(1)},
+		{
+			ProductKey: "plenty", Category: "Еда", Name: "Много", PriceKopecks: 10000,
+			Available: true, StockQty: ptrInt32(50),
+		},
+		{
+			ProductKey: "scarce", Category: "Еда", Name: "Мало", PriceKopecks: 10000,
+			Available: true, StockQty: ptrInt32(1),
+		},
 	})
 	plentyID := env.productID(t, snapshot, "plenty")
 	scarceID := env.productID(t, snapshot, "scarce")
@@ -417,7 +431,7 @@ func TestOrderService_ChangeStatus_ConcurrentTransitions(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < racers; i++ {
+	for i := range racers {
 		to := domain.StatusAccepted
 		if i%2 == 1 {
 			to = domain.StatusRejected
@@ -650,14 +664,21 @@ func TestIdempotencyRepo_Reserve_ConcurrentClaimIsExclusive(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < racers; i++ {
+	// Ошибки складываем и проверяем после ожидания: require из чужой горутины
+	// тест не останавливает, а лишь помечает — результат непредсказуем.
+	errs := make([]error, racers)
+
+	for i := range racers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 
 			_, claimed, err := env.idempotency.Reserve(ctx, key, testHash("payload"), expires)
-			require.NoError(t, err)
+			if err != nil {
+				errs[i] = err
+				return
+			}
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -671,6 +692,7 @@ func TestIdempotencyRepo_Reserve_ConcurrentClaimIsExclusive(t *testing.T) {
 	close(start)
 	wg.Wait()
 
+	require.NoError(t, errors.Join(errs...))
 	assert.Equal(t, 1, claims, "ключ захвачен ровно один раз")
 	assert.Equal(t, racers-1, replays)
 }
@@ -821,7 +843,7 @@ func TestOutboxRepo_ClaimBatch_ConcurrentWorkersDoNotOverlap(t *testing.T) {
 
 	const orders = 12
 	wanted := make(map[string]struct{}, orders)
-	for i := 0; i < orders; i++ {
+	for range orders {
 		order, err := env.orderService.Create(ctx, newOrderDraft(restaurant.ID,
 			domain.DraftItem{ProductKey: "pasta_carbonara", Qty: 1},
 		))
@@ -836,15 +858,22 @@ func TestOutboxRepo_ClaimBatch_ConcurrentWorkersDoNotOverlap(t *testing.T) {
 		claims = make(map[int64]int)
 	)
 
+	// Ошибки складываем и проверяем после ожидания: require из чужой горутины
+	// тест не останавливает, а лишь помечает — результат непредсказуем.
+	errs := make([]error, workers)
+
 	start := make(chan struct{})
-	for i := 0; i < workers; i++ {
+	for i := range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
 
 			events, err := env.outbox.ClaimBatch(ctx, 100, time.Minute)
-			require.NoError(t, err)
+			if err != nil {
+				errs[i] = err
+				return
+			}
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -858,6 +887,7 @@ func TestOutboxRepo_ClaimBatch_ConcurrentWorkersDoNotOverlap(t *testing.T) {
 	close(start)
 	wg.Wait()
 
+	require.NoError(t, errors.Join(errs...))
 	assert.Len(t, claims, orders, "каждое событие захвачено")
 	for id, count := range claims {
 		assert.Equalf(t, 1, count, "событие %d выдано более одного раза", id)
@@ -964,11 +994,8 @@ func TestOutboxWorker_DeliversAndMarksSent(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, worker.Run(runCtx))
-	}()
+	workerErr := make(chan error, 1)
+	go func() { workerErr <- worker.Run(runCtx) }()
 
 	require.Eventually(t, func() bool {
 		var sentAt *time.Time
@@ -979,7 +1006,7 @@ func TestOutboxWorker_DeliversAndMarksSent(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "событие должно быть доставлено и отмечено")
 
 	cancel()
-	<-done
+	require.NoError(t, <-workerErr)
 
 	var found bool
 	for _, call := range deliverer.delivered() {
@@ -1019,11 +1046,8 @@ func TestOutboxWorker_RetriesWithBackoff(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, worker.Run(runCtx))
-	}()
+	workerErr := make(chan error, 1)
+	go func() { workerErr <- worker.Run(runCtx) }()
 
 	require.Eventually(t, func() bool {
 		var sentAt *time.Time
@@ -1033,7 +1057,7 @@ func TestOutboxWorker_RetriesWithBackoff(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, "после неудачи событие доставляется повторно")
 
 	cancel()
-	<-done
+	require.NoError(t, <-workerErr)
 
 	var attempts int32
 	require.NoError(t, testPool.QueryRow(ctx,
@@ -1073,11 +1097,8 @@ func TestReaperWorker_CancelsStaleOrdersAndPurgesKeys(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, worker.Run(runCtx))
-	}()
+	workerErr := make(chan error, 1)
+	go func() { workerErr <- worker.Run(runCtx) }()
 
 	require.Eventually(t, func() bool {
 		current, err := env.orders.GetByPublicNumber(ctx, order.PublicNumber)
@@ -1092,7 +1113,7 @@ func TestReaperWorker_CancelsStaleOrdersAndPurgesKeys(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "протухший ключ должен быть удалён")
 
 	cancel()
-	<-done
+	require.NoError(t, <-workerErr)
 
 	assert.Equal(t, int32(10), *env.stockOf(t, pizzaID), "остатки вернулись в каталог")
 
@@ -1230,11 +1251,8 @@ func TestOutboxWorker_PermanentRejectionIsNotRetried(t *testing.T) {
 	runCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		require.NoError(t, worker.Run(runCtx))
-	}()
+	workerErr := make(chan error, 1)
+	go func() { workerErr <- worker.Run(runCtx) }()
 
 	require.Eventually(t, func() bool {
 		var deadAt *time.Time
@@ -1244,7 +1262,7 @@ func TestOutboxWorker_PermanentRejectionIsNotRetried(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "событие должно быть снято с доставки")
 
 	cancel()
-	<-done
+	require.NoError(t, <-workerErr)
 
 	var attempts int32
 	require.NoError(t, testPool.QueryRow(ctx,

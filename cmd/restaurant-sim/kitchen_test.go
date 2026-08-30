@@ -58,7 +58,7 @@ func TestDedupCache_SizeStaysBounded(t *testing.T) {
 	defer c.mu.Unlock()
 	assert.LessOrEqual(t, len(c.seen), capacity)
 	assert.LessOrEqual(t, len(c.order), capacity)
-	assert.Equal(t, len(c.seen), len(c.order), "карта и очередь вытеснения не разошлись")
+	assert.Len(t, c.order, len(c.seen), "карта и очередь вытеснения не разошлись")
 }
 
 // Вебхуки приходят параллельно: платформа может доставлять пачку в несколько
@@ -76,7 +76,7 @@ func TestDedupCache_ConcurrentAddIsExclusive(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < racers; i++ {
+	for range racers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

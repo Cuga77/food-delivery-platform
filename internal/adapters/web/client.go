@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -166,7 +167,6 @@ func (h *Handler) createOrder(w http.ResponseWriter, r *http.Request) {
 	h.completeOrderForm(ctx, key, order.PublicNumber.String())
 
 	// Post/Redirect/Get: обновление страницы результата не повторяет отправку.
-	//nolint:gosec // G710: путь построен из разобранного UUID, см. orderPath
 	http.Redirect(w, r, orderPath(order.PublicNumber), http.StatusSeeOther)
 }
 
@@ -330,7 +330,7 @@ func (h *Handler) completeOrderForm(ctx context.Context, key, publicNumber strin
 		// Заказ создан и пользователь его увидит; повтор формы в худшем случае
 		// выполнится заново. Логируем и не мешаем ответу.
 		h.log.ErrorContext(completeCtx, "не удалось сохранить результат формы заказа",
-			"idempotency_key", key, "error", err)
+			slog.String("idempotency_key", key), slog.Any("error", err))
 	}
 }
 
@@ -342,7 +342,7 @@ func (h *Handler) releaseOrderForm(ctx context.Context, key string) {
 
 	if err := h.idempotency.Release(releaseCtx, webIdempotencyPrefix+key); err != nil {
 		h.log.ErrorContext(releaseCtx, "не удалось освободить ключ формы заказа",
-			"idempotency_key", key, "error", err)
+			slog.String("idempotency_key", key), slog.Any("error", err))
 	}
 }
 

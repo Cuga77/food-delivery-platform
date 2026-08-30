@@ -189,7 +189,7 @@ func TestError_WrappingAndCodes(t *testing.T) {
 	err := domain.WrapErrorf(cause, domain.CodeServiceUnavailable, "БД недоступна")
 
 	assert.Equal(t, domain.CodeServiceUnavailable, domain.CodeOf(err))
-	assert.True(t, errors.Is(err, cause), "исходная ошибка сохраняется в цепочке")
+	require.ErrorIs(t, err, cause, "исходная ошибка сохраняется в цепочке")
 	assert.True(t, domain.HasCode(err, domain.CodeServiceUnavailable))
 	assert.False(t, domain.HasCode(err, domain.CodeOutOfStock))
 

@@ -19,7 +19,7 @@ import (
 // Корректная остановка — не украшение: без неё каждый деплой обрывал бы заказы
 // в момент оформления, посреди открытой транзакции.
 
-func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // freePort занимает и сразу отпускает порт, чтобы получить заведомо свободный.
 func freePort(t *testing.T) int {
@@ -38,11 +38,16 @@ func freePort(t *testing.T) int {
 }
 
 // get выполняет запрос с контекстом теста.
-func get(t *testing.T, url string) (*http.Response, error) {
-	t.Helper()
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
-	require.NoError(t, err)
+//
+// Утверждений внутри намеренно нет: помощник вызывается в том числе из
+// горутин, а t.FailNow из чужой горутины тест не останавливает — он лишь
+// помечает его, и дальнейшее поведение непредсказуемо. Ошибку возвращаем
+// вызывающему, который проверит её на своей горутине.
+func get(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return http.DefaultClient.Do(req)
 }
@@ -82,7 +87,7 @@ func TestRun_ServesAndStopsCleanly(t *testing.T) {
 
 	srv, done, cancel := start(t, handler, config(0))
 
-	resp, err := get(t, "http://"+srv.Addr())
+	resp, err := get(t.Context(), "http://"+srv.Addr())
 	require.NoError(t, err)
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
@@ -93,7 +98,7 @@ func TestRun_ServesAndStopsCleanly(t *testing.T) {
 
 	select {
 	case err := <-done:
-		assert.NoError(t, err, "штатная остановка не ошибка")
+		require.NoError(t, err, "штатная остановка не ошибка")
 	case <-time.After(5 * time.Second):
 		t.Fatal("сервер не остановился")
 	}
@@ -121,7 +126,7 @@ func TestRun_WaitsForInFlightRequest(t *testing.T) {
 	responses := make(chan result, 1)
 
 	go func() {
-		resp, err := get(t, "http://"+srv.Addr())
+		resp, err := get(t.Context(), "http://"+srv.Addr())
 		if err != nil {
 			responses <- result{err: err}
 			return
@@ -164,7 +169,7 @@ func TestRun_ReportsShutdownTimeout(t *testing.T) {
 	srv, done, cancel := start(t, handler, cfg)
 
 	go func() {
-		resp, err := get(t, "http://"+srv.Addr())
+		resp, err := get(t.Context(), "http://"+srv.Addr())
 		if err == nil {
 			_ = resp.Body.Close()
 		}

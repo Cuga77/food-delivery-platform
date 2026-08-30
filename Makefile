@@ -3,6 +3,8 @@ SHELL := /bin/bash
 
 # Версии инструментов, которые не пинуются через `tool` в go.mod.
 GOLANGCI_LINT_VERSION := v2.13.1
+GOFUMPT_VERSION       := v0.11.0
+GOVULNCHECK_VERSION   := v1.7.0
 K6_VERSION            := latest
 PLANTUML_VERSION      := 1.2025.4
 
@@ -105,15 +107,46 @@ $(LOCAL_BIN)/golangci-lint:
 	@mkdir -p $(LOCAL_BIN)
 	GOBIN=$(LOCAL_BIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
+$(LOCAL_BIN)/gofumpt:
+	@mkdir -p $(LOCAL_BIN)
+	GOBIN=$(LOCAL_BIN) go install mvdan.cc/gofumpt@$(GOFUMPT_VERSION)
+
+$(LOCAL_BIN)/govulncheck:
+	@mkdir -p $(LOCAL_BIN)
+	GOBIN=$(LOCAL_BIN) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+# Файлы, которые форматируются: сгенерированный код не трогаем.
+GO_SOURCES = $(shell find . -name '*.go' -not -path './internal/gen/*' -not -path './bin/*')
+
 ## lint: статический анализ (golangci-lint)
 .PHONY: lint
 lint: $(LOCAL_BIN)/golangci-lint
 	$(LOCAL_BIN)/golangci-lint run ./...
 
-## fmt: автоформатирование
+## vuln: проверка зависимостей по базе уязвимостей Go
+#
+# govulncheck смотрит не на версии в go.mod, а на то, вызывается ли уязвимый
+# код фактически: сообщает только о том, до чего есть путь из наших функций.
+.PHONY: vuln
+vuln: $(LOCAL_BIN)/govulncheck
+	$(LOCAL_BIN)/govulncheck ./...
+
+## fmt: автоформатирование (gofumpt + порядок импортов)
 .PHONY: fmt
-fmt: $(LOCAL_BIN)/golangci-lint
+fmt: $(LOCAL_BIN)/gofumpt $(LOCAL_BIN)/golangci-lint
+	$(LOCAL_BIN)/gofumpt -w $(GO_SOURCES)
 	$(LOCAL_BIN)/golangci-lint fmt ./...
+
+## fmt-check: проверить форматирование, ничего не меняя
+.PHONY: fmt-check
+fmt-check: $(LOCAL_BIN)/gofumpt
+	@unformatted="$$($(LOCAL_BIN)/gofumpt -l $(GO_SOURCES))"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "не отформатированы gofumpt (выполните make fmt):"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+	@echo "форматирование в порядке"
 
 ## tidy: привести go.mod/go.sum в порядок
 .PHONY: tidy
@@ -202,9 +235,9 @@ diagrams: $(PLANTUML_JAR)
 # Композитные цели
 # ---------------------------------------------------------------------------
 
-## check: полный локальный прогон качества (gen-check + lint + test)
+## check: полный локальный прогон качества
 .PHONY: check
-check: gen-check lint test
+check: gen-check fmt-check lint vuln test
 
 ## e2e: чистый стек с нуля + сквозной сценарий
 .PHONY: e2e

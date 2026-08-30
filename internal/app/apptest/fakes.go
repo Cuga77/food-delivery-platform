@@ -142,25 +142,35 @@ func New() *Env {
 			1: {
 				Menu: domain.Menu{ID: 1, RestaurantID: 1, Version: 1, Status: domain.MenuPublished},
 				Products: []domain.Product{
-					{ID: 11, MenuID: 1, ProductKey: "pizza_margherita", Category: "Пицца",
+					{
+						ID: 11, MenuID: 1, ProductKey: "pizza_margherita", Category: "Пицца",
 						Name: "Пицца Маргарита", Description: "Томаты, моцарелла, базилик",
-						PriceKopecks: 59000, Available: true, StockQty: Ptr(int32(10))},
-					{ID: 12, MenuID: 1, ProductKey: "pasta_carbonara", Category: "Паста",
-						Name: "Паста Карбонара", PriceKopecks: 49000, Available: true},
-					{ID: 13, MenuID: 1, ProductKey: "dessert_tiramisu", Category: "Десерты",
+						PriceKopecks: 59000, Available: true, StockQty: Ptr(int32(10)),
+					},
+					{
+						ID: 12, MenuID: 1, ProductKey: "pasta_carbonara", Category: "Паста",
+						Name: "Паста Карбонара", PriceKopecks: 49000, Available: true,
+					},
+					{
+						ID: 13, MenuID: 1, ProductKey: "dessert_tiramisu", Category: "Десерты",
 						Name: "Тирамису", PriceKopecks: 29000, Available: false,
-						StockQty: Ptr(int32(5))},
-					{ID: 14, MenuID: 1, ProductKey: "drink_cola", Category: "Напитки",
+						StockQty: Ptr(int32(5)),
+					},
+					{
+						ID: 14, MenuID: 1, ProductKey: "drink_cola", Category: "Напитки",
 						Name: "Кола", PriceKopecks: 12000, Available: true,
-						StockQty: Ptr(int32(2))},
+						StockQty: Ptr(int32(2)),
+					},
 				},
 			},
 			2: {
 				Menu: domain.Menu{ID: 2, RestaurantID: 2, Version: 1, Status: domain.MenuPublished},
 				Products: []domain.Product{
-					{ID: 21, MenuID: 2, ProductKey: "roll_philadelphia", Category: "Роллы",
+					{
+						ID: 21, MenuID: 2, ProductKey: "roll_philadelphia", Category: "Роллы",
 						Name: "Филадельфия", PriceKopecks: 64000, Available: true,
-						StockQty: Ptr(int32(8))},
+						StockQty: Ptr(int32(8)),
+					},
 				},
 			},
 		},
