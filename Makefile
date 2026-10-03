@@ -10,7 +10,6 @@ PLANTUML_VERSION      := 1.2025.4
 
 COMPOSE     := docker compose
 LOCAL_BIN   := $(CURDIR)/bin
-PLANTUML_JAR := $(CURDIR)/build/plantuml.jar
 
 # DSN для операций с хоста (make test-integration, migrate-*).
 DATABASE_URL_HOST ?= postgres://kitchen:kitchen@localhost:5432/kitchen?sslmode=disable
@@ -217,18 +216,14 @@ load: load-browse load-order load-contention
 # Диаграммы
 # ---------------------------------------------------------------------------
 
-$(PLANTUML_JAR):
-	@mkdir -p $(dir $(PLANTUML_JAR))
-	curl -sSfL -o $(PLANTUML_JAR) \
-		https://github.com/plantuml/plantuml/releases/download/v$(PLANTUML_VERSION)/plantuml-$(PLANTUML_VERSION).jar
-
 ## diagrams: отрендерить docs/diagrams/*.puml в SVG
-# -Playout=smetana включает встроенный в PlantUML движок раскладки, поэтому
-# внешний graphviz (dot) не нужен — диаграммы собираются и в CI, и на пустой
-# машине без дополнительных пакетов.
+# Рендер идёт в закреплённом образе PlantUML: ширина текста в SVG зависит от
+# установленных шрифтов, и на разных машинах получались разные файлы.
+# -Playout=smetana включает встроенный движок раскладки, graphviz не нужен.
 .PHONY: diagrams
-diagrams: $(PLANTUML_JAR)
-	java -jar $(PLANTUML_JAR) -tsvg -nometadata -Playout=smetana docs/diagrams/*.puml
+diagrams:
+	docker run --rm --user $$(id -u):$$(id -g) -e JAVA_TOOL_OPTIONS=-Duser.home=/tmp -v $(CURDIR)/docs/diagrams:/data -w /data \
+		plantuml/plantuml:$(PLANTUML_VERSION) -tsvg -nometadata -Playout=smetana '*.puml'
 	@echo "готово: $$(ls docs/diagrams/*.svg | wc -l) SVG"
 
 # ---------------------------------------------------------------------------

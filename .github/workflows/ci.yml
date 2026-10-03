@@ -165,13 +165,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
       # Диаграммы — часть документации и обязаны собираться из исходников.
-      # Рендер идёт через встроенный Smetana, поэтому graphviz не нужен.
+      # Рендер идёт в закреплённом Docker-образе PlantUML, как и локально.
       - name: make diagrams
         run: make diagrams
 
